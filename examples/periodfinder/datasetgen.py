@@ -74,7 +74,8 @@ def datapointgen(T,t):
     l=sum_to_x(3,1)
     
     for i in range(t):
-        samples=samples+[dot(l,[F1(T1,i),F2(T2,i),F3(T3,i)])]     
+        samples=samples+[dot(l,[F1(T1,i),F2(T2,i),F3(T3,i)])]
+        
     return(samples)
     
 def plot(T,t):
@@ -92,10 +93,13 @@ plot(128*3,1000)
 
 def datasetgen(t,n):
     dataset=[]
+    label=[]
     for i in range(n):
         T=random.randint(20,499)
         dataset.append(datapointgen(T,t))
-    return(dataset)
+        label.append(T)
+        
+    return(dataset,label)
     
     
 
@@ -103,7 +107,7 @@ def datasetgen(t,n):
 # In[232]:
 
 
-datasetgen(1000,5)
+
 
 
 # In[ ]:
