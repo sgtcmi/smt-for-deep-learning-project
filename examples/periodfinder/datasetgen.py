@@ -91,11 +91,12 @@ plot(128*3,1000)
 # In[231]:
 
 
-def datasetgen(t,n):
+def datasetgen(t,n,sparsity):
     dataset=[]
     label=[]
     for i in range(n):
-        T=random.randint(20,499)
+        T=random.randrange(t//10,t//2,sparsity )
+        
         dataset.append(datapointgen(T,t))
         label.append(T)
         
