@@ -96,6 +96,7 @@ Verify properties
 """
 
 from direct_check import *
+from perm_check import *
 
 # We get the weights and biases of the network
 weights = [l.get_weights()[0].tolist() for l in dnn.layers]
@@ -113,7 +114,16 @@ def input_constr(z3_inp, solv):
     assert_valid_move(solv, z3_move)
     assert_input_encoding(solv, z3_move, z3_inp)
 
+print('Direct Check')
 res, mdl = direct_check(weights, biases, perm, input_constr)
+
+if res:
+    print('Verified')
+else:
+    print('Not verified, model: ', mdl)
+
+print('Perm Check')
+res, mdl = perm_check(weights, biases, perm, input_constr)
 
 if res:
     print('Verified')
