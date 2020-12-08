@@ -5,6 +5,8 @@ Use the algo to check for permutations
 import z3
 from utils import *
 
+import time #PROFILE
+ 
 def perm_check(weights, biases, perm, input_cond_hook):
     """
     Check if DNN given by the `weights` and `biases` is invariant under the given `perm`utation.
@@ -14,9 +16,9 @@ def perm_check(weights, biases, perm, input_cond_hook):
 
     # Vars
     z3_vars = [ z3.Real('v_0_%d'%i) for i in range(len(perm)) ]
-    z3_vars_perm = [ z3.Real('p_v_0_%d'%i) for i in range(len(perm)) ]
+    #z3_vars_perm = [ z3.Real('p_v_0_%d'%i) for i in range(len(perm)) ]
     z3_nodes = [z3_vars]
-    z3_nodes_perm = [z3_vars_perm]
+    z3_nodes_perm = [[z3_vars[p] for p in perm]]
     z3_nodes_int = []
     z3_nodes_perm_int = []
 
@@ -24,8 +26,8 @@ def perm_check(weights, biases, perm, input_cond_hook):
     solver = z3.Solver()
 
     # Encode the fact that z3_vars and z3_vars_perm are inputs and permutatios of one another
-    solver.add(encode_perm_props.encode_perm(z3_vars, z3_vars_perm, perm))
-    #input_cond_hook(z3_vars, solver)
+    #solver.add(encode_perm_props.encode_perm(z3_vars, z3_vars_perm, perm))
+    #input_cond_hook(z3_vars, solver) #TODO
 
 
     relu_expr = lambda z: z3.If(z >= 0, z, 0)
@@ -56,9 +58,11 @@ def perm_check(weights, biases, perm, input_cond_hook):
         solver.add( z3.Not( z3.And([ v == p_v for v,p_v in 
                         zip(z3_nodes_int[curr_lyr], z3_nodes_perm_int[curr_lyr]) ])))
         
-        print(solver)
+        #print(solver)
         print('Calling solver')
+        p1 = time.process_time()
         res = solver.check()
+        print('Time elapsed: ', time.process_time() - p1)
         if res == z3.unsat:
             print('Verified at layer %d'%curr_lyr)
             return (True, [])
