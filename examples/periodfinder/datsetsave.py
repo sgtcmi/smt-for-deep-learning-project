@@ -1,17 +1,14 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sat Dec  5 20:50:40 2020
-
-@author: sgtbh
-"""
-
 
 from datasetgen import datasetgen
 
+sp=int(input("number of sample points to be generated :"))
+dp=int(input("number of datapoints needed : "))
+s=int(input("sparsity : "))
+dataset_filename=input("desired filename :")
+l=str(datasetgen(sp,dp,s))
 
-l=str(datasetgen(500,5000,10))
 
 
-text_file = open("dataset_500_5000_10.txt","w")
+text_file = open(dataset_filename,"w")
 n=text_file.write(l)
 text_file.close()

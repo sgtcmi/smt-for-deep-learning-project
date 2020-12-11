@@ -7,13 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1p8LDQ1VmbW0GSOefsSmAa8d9P5fdU9Gy
 """
 
-from google.colab import files
-uploaded = files.upload()
-
-dataset=input()
-
-print(dataset)
-
 import os
 import numpy as np
 import pandas as pd
@@ -31,8 +24,10 @@ def dnn(dataset,input_dim,num_layer,epoch,batch_size,sparsity):
   X,Y=eval(data)
   #print(Y[5:15])
   X_train,X_test, Y_train,Y_test=train_test_split(X,Y, test_size=0.30, random_state=42)
-  Y_train=[[i]for i in Y_train ]
-  Y_test=[[i]for i in Y_test ]
+  X_train=np.asarray(X_train)
+  X_test=np.asarray(X_test)
+  Y_train=np.asarray([[i]for i in Y_train ])
+  Y_test=np.asarray([[i]for i in Y_test ])
   model=Sequential()
   model.add(Dense(input_dim, input_dim=input_dim, activation='relu'))
   for i in range(input_dim,0,-(input_dim//num_layer)):
@@ -51,9 +46,10 @@ def dnn(dataset,input_dim,num_layer,epoch,batch_size,sparsity):
       #print(prediction[i][0],Y_test[i])  
   accuracy=(count/len(X_test))*100
   print(accuracy)
+  print(model.summary())
   return(model)
 
-dnn(dataset,500,10,500,100,10)
+
 
 
 
