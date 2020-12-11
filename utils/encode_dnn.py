@@ -33,3 +33,13 @@ def assert_input_encoding(solver, z3_bool_input, z3_real_input):
     for b, r in zip(z3_bool_input, z3_real_input):
         solver.add(z3.If(b, r == 1, r == 0))
 
+
+def eval_dnn(weights, biases, inp):
+    """
+    Evaluates a DNN on a given input
+    """
+
+    layer = inp
+    for w, b in zip(weights, biases):
+        layer = [ sum(( w[j][i]*layer[j] for j in range(len(w[i])) )) for i in range(len(b)) ]
+    return layer
