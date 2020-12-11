@@ -109,6 +109,7 @@ def push_forward_relu(left_space):
 
     for i in range(n):
         solver.push()
+        print('Adding basis %d'%i, end='\r')
 
         # Linear independence conditions
         if len(right_basis) > 0:
@@ -126,6 +127,8 @@ def push_forward_relu(left_space):
             break
 
         solver.pop()
+
+    print('\nPushforward complete')
 
     return right_basis
         

@@ -85,6 +85,7 @@ else:
 
 # Test model
 dnn.evaluate(test_x, test_y, verbose=2)
+print(dnn.summary())
 
 # Get weights
 #print([(type(l.get_weights()), l.get_weights()) for l in dnn.layers])
