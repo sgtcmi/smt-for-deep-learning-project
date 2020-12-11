@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import random
 
 
-# In[230]:
+
 
 
 def dot(v1, v2):
@@ -82,14 +82,10 @@ def plot(T,t):
     plt.plot(list(range(t)),datapointgen(T,t))    
 
 
-# In[224]:
+
 
 
 plot(128*3,1000)
-
-
-# In[231]:
-
 
 def datasetgen(t,n,sparsity):
     dataset=[]
