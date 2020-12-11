@@ -123,7 +123,7 @@ else:
     print('Not verified, model: ', mdl)
 
 print('Perm Check')
-res, mdl = perm_check(weights, biases, perm, input_constr)
+res, mdl = perm_check(weights, biases, perm)
 
 if res:
     print('Verified')
