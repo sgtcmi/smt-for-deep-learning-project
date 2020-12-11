@@ -1,40 +1,37 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[229]:
-
 
 import numpy as np
 import math
 from scipy import signal
-import matplotlib
-
-import matplotlib.pyplot as plt
 import random
 
 
-# In[230]:
 
 
+#dot product of two vectors
 def dot(v1, v2):
     return sum(x*y for x,y in zip(v1,v2))
-def F1(T,t):                                               #sin
+# sin-wave function
+def F1(T,t):                                               
     return math.sin((2*np.pi*(1.0/T)*t))
-def F2(T,t):                                               #sawtooth
+# sawtooth wave function
+def F2(T,t):                                               
     return(signal.sawtooth(2 * np.pi * (1.0/T) * t))
-def F3(T,t):                                               #square
+# square wave function
+def F3(T,t):                                               
     return(signal.square(2 * np.pi * (1.0/T) * t))
 
+# Given a number x find n numbers such that their sum is x
 def sum_to_x(n, x):
     values = [0.0, x] + list(np.random.uniform(low=0.0,high=x,size=n-1))
     values.sort()
     return [values[i+1] - values[i] for i in range(n)]
-
+# prime factorization
 def ffactor(n):
     
     for i in range(2,n+1):
         if n%i==0:
             return(i) 
+# return a dictionary with the prime factors as key and their powers as values
 def primfact(n):
     x={}
     while n>1:
@@ -47,8 +44,7 @@ def primfact(n):
         n=n//m 
     return(x)     
     
-
-    
+#Given a number T(the time period) get three numbers T1 ,T2 ,T3 whose lcm is T   
     
 def revlcm(T):
     d=primfact(T)
@@ -66,8 +62,8 @@ def revlcm(T):
             
     return(T1,T2,T3)      
 
-    
-    
+   
+# data point with t samples    
 def datapointgen(T,t):
     T1,T2,T3=revlcm(T)
     samples=[]
@@ -77,25 +73,21 @@ def datapointgen(T,t):
         samples=samples+[dot(l,[F1(T1,i),F2(T2,i),F3(T3,i)])]
         
     return(samples)
-    
+# To plot the curve (superimposed waveform)    
 def plot(T,t):
     plt.plot(list(range(t)),datapointgen(T,t))    
 
 
-# In[224]:
 
 
-plot(128*3,1000)
 
-
-# In[231]:
-
-
-def datasetgen(t,n):
+def datasetgen(t,n,sparsity):
     dataset=[]
     label=[]
     for i in range(n):
-        T=random.randint(20,499)
+        print('Generating point %d'%i, end='\r')
+        T=random.randrange(t//10,t//2,sparsity )
+        
         dataset.append(datapointgen(T,t))
         label.append(T)
         
@@ -103,14 +95,6 @@ def datasetgen(t,n):
     
     
 
-
-# In[232]:
-
-
-
-
-
-# In[ ]:
 
 
 
