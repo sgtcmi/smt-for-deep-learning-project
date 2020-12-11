@@ -2,9 +2,6 @@
 import numpy as np
 import math
 from scipy import signal
-import matplotlib
-
-import matplotlib.pyplot as plt
 import random
 
 
@@ -84,12 +81,11 @@ def plot(T,t):
 
 
 
-#plot(128*3,1000)
-# To generate dataset of your choice  
 def datasetgen(t,n,sparsity):
     dataset=[]
     label=[]
     for i in range(n):
+        print('Generating point %d'%i, end='\r')
         T=random.randrange(t//10,t//2,sparsity )
         
         dataset.append(datapointgen(T,t))
