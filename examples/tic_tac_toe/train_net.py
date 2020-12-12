@@ -85,6 +85,7 @@ else:
 
 # Test model
 dnn.evaluate(test_x, test_y, verbose=2)
+print(dnn.summary())
 
 # Get weights
 #print([(type(l.get_weights()), l.get_weights()) for l in dnn.layers])
@@ -123,7 +124,7 @@ else:
     print('Not verified, model: ', mdl)
 
 print('Perm Check')
-res, mdl = perm_check(weights, biases, perm, input_constr)
+res, mdl = perm_check(weights, biases, perm)
 
 if res:
     print('Verified')
