@@ -1,7 +1,7 @@
 # smt-for-deep-learning-project
 
 This is a project submission for the SMT4DL course done by Sougata Bhattacharya and Diganta
-Mukhopadhyay.
+Mukhopadhyay. It is hosted [here](https://github.com/sgtcmi/smt-for-deep-learning-project.git).
 
 The aim of this project is to develop a general framework to verify the invariance of DNNs under a
 permutation of the inputs.
