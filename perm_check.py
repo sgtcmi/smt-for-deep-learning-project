@@ -140,16 +140,23 @@ def perm_check(weights, biases, perm):
     Check if DNN given by the `weights` and `biases` is invariant under the given `perm`utation.
     """
 
+    ## ABSTRACTION
+
     # Represent affine transforms as matrices in a larger space
-    #afft = [ [ r + [0] for r in w ] + b + [1] for w, b in weights, biases ]
+    # Joint weight matrix
     dmat = [ np.matrix([r + [0]*len(w[0]) for r in w] + [[0]*len(w[0]) + r for r in w]) for w,b in zip(weights,biases) ]
+    # Joint affine transform
     lmat = [ np.matrix([r + [0]*len(w[0]) + [0] for r in w] + [[0]*len(w[0]) + r + [0] for r in w] + [b + b + [1]])
                     for w,b in zip(weights,biases) ]
+    # Kernels of joint weight matrix
     dkrn = [ np.transpose(sp.null_space(np.transpose(dm))) for dm in dmat]
+    # Natrural inclusion of above kernels into higher space
     lkrn_p = [ [ r.tolist() + [0] for r in dk] for dk in dkrn]
 
     # Stats
     inp_dim = len(weights[0])
+    out_dim = len(biases[-1])
+    num_lyrs = len(weights)
 
     # Generate basis representing permutation constraint in the larger space
     in_basis = []
@@ -162,11 +169,11 @@ def perm_check(weights, biases, perm):
     print(len(in_basis), len(in_basis[0]))
     
     # Track interpolants
-    pre_lin_ints = []
-    post_lin_ints = []
+    pre_lin_ints = []           # Interpolants
+    post_lin_ints = []          # Interpolants after going through linear transform
 
     # Linear inclusion loop
-    for w, b, lm, dm, curr_lyr in zip(weights, biases, lmat, dmat, range(len(weights))):
+    for w, b, lm, dm, curr_lyr in zip(weights, biases, lmat, dmat, range(num_lyrs)):
         print('Kernel check for layer ', curr_lyr+1)
         l = len(w[0])
 
@@ -180,7 +187,7 @@ def perm_check(weights, biases, perm):
 
         if np.count_nonzero(eq_basis) == 0:
             print('Verified at layer via linear inclusion ', curr_lyr+1)
-            return True, []
+            #return True, [] #DEBUG
         else:
             print('Linear inclusion failed at layer ', curr_lyr+1)
             
@@ -208,7 +215,7 @@ def perm_check(weights, biases, perm):
             if not encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) == \
                     encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
                 print('Found CEX')
-                return False, cex[:inp_dim]
+                #return False, cex[:inp_dim] #DEBUG
             print('CEX is spurious')
 
         # Save these interpolants, and get next ones
@@ -217,6 +224,84 @@ def perm_check(weights, biases, perm):
         out_basis = out_basis.tolist()
         post_lin_ints.append(out_basis)
         in_basis = push_forward_relu(out_basis)
+
+    
+    
+    ## REFINEMENT
+
+    # Set up solver and vars
+    refined_solver = z3.Solver()
+    # Stores the values going into each layer's transform in reverse order. First member stores
+    # output.
+    lyr_vars =  [[ z3.Real('lyr_%d_%d'%(num_lyrs, nn)) for nn in range(out_dim) ]]
+    lyr_vars_p = [[ z3.Real('lyr_p_%d_%d'%(num_lyrs, nn)) for nn in range(out_dim) ]]
+    for v, v_ in zip(lyr_vars[-1], lyr_vars_p[-1]):
+        refined_solver.add(v == v_)
+
+    # Refinement Loop
+    for itp, w, b, i in zip(reversed(pre_lin_ints), reversed(weights), reversed(biases),
+                            range(num_lyrs - 1, 0, -1)):
+        print("Refining layer %d"%i)
+
+        # Encode layers
+        lyr_vars.append([ z3.Real('lyr_%d_%d'%(i, nn)) for nn in range(len(w)) ])
+        lyr_vars_p.append([ z3.Real('lyr_p_%d_%d'%(i, nn)) for nn in range(len(w)) ])
+        lyr_out = encode_dnn.encode_network([w], [b], lyr_vars[-1])
+        lyr_out_p = encode_dnn.encode_network([w], [b], lyr_vars_p[-1])
+        for le, lep, lv, lvp in zip(lyr_out, lyr_out_p, lyr_vars[-2], lyr_vars_p[-2]):
+            refined_solver.add(z3.Not(le == lv))
+            refined_solver.add(z3.Not(lep == lvp))
+
+        # Perform refined check
+        refined_solver.push()
+        
+        itp_vars = [ z3.Real('cf_%d'%i) for i in range(len(itp)) ]
+        for i in range(len(w)):
+            refined_solver.add( lyr_vars[-1][i] == z3.Sum([ iv * it[i] for iv, it in 
+                                                            zip(itp_vars,itp) ]))
+            refined_solver.add( lyr_vars_p[-1][i] == z3.Sum([ iv * it[len(w) + i] for iv, it in 
+                                                            zip(itp_vars,itp) ]))
+        refined_solver.add( 1 == z3.Sum([ iv * it[-1] for it in zip(itp_vars, itp) ]))
+
+        if refined_solver.check() == z3.unsat:
+            print("Verified via refinement at layer %d")
+            #return True, [] #DEBUG
+        else:
+            print('Found potential cex, attempting pullback....', end='')
+
+            mdl = refined_solver.model()
+            # The cex is a single point in the joint affine space at the begining of the current
+            # layer, and that can be represented by the follwing point
+            cex_basis = [ list(map(mdl.eval, lyr_vars[-1])) + list(map(mdl.eval, lyr_vars_p[-1])) +
+                            [1] ]
+            
+            # Pull back cex
+            cex = cex_basis[0]
+            for prel, pstl, idx in zip(reversed(pre_lin_ints[:i+1]), reversed(post_lin_ints[:i+1]),
+                                        reversed(range(curr_lyr))):
+                suc, cex = pull_back_relu(pstl, cex_basis)
+                if not suc:
+                    print('failed')
+                    break
+                
+                # Pull back over affine transform using kernel
+                cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
+                sl0, _, _, _ = sp.lstsq(np.transpose(dmat[idx]), np.asarray(cex))
+                cex_basis = lkrn_p[idx] + [sl0 + [1]]
+
+            print('success') 
+            
+            # Check if true cex, TODO: check if this should always return true, if so optimise
+            if not encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) == \
+                    encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
+                print('Found CEX')
+                #return False, cex[:inp_dim] #DEBUG
+            print('CEX is spurious')
+
+
+
+        
+    
             
     return #DEBUG
     #TODO complete
