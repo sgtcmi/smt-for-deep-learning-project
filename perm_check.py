@@ -60,7 +60,7 @@ def pull_back_relu(left_space, right_space):
     assert(len(left_space[0]) == len(right_space[0]))
 
 
-    solver = z3.Solver()
+    solver = z3.SolverFor("LRA")
     z3_rc = [ z3.Real('rc_%d'%i) for i in range(len(right_space)) ]     # vector in right_space
     z3_lc = [ z3.Real('lc_%d'%i) for i in range(len(left_space)) ]     # vector in right_space
 
@@ -90,7 +90,7 @@ def push_forward_relu(left_space):
 
     n = len(left_space[0])
 
-    solver = z3.Solver()
+    solver = z3.SolverFor("LRA")
 
     # Coefficients for the basis of the affine space
     z3_lcf = [ z3.Real('lcf_%d'%i) for i in range(n) ]
@@ -179,7 +179,7 @@ def perm_check(weights, biases, perm):
 
         # Check linear inclusion by finding subbasis of input basis that does not go to 0. Represent
         # affine transform as a linear transform over a higher dimensional space
-        print(np.matrix(in_basis).shape, lm.shape)
+        # print(np.matrix(in_basis).shape, lm.shape) #DEBUG
         out_basis = np.matrix(in_basis) * lm
         eq_basis  = out_basis           * np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
                                                     [[0]*i + [-1] + [0]*(l-i-1) for i in range(l)] +
@@ -230,7 +230,7 @@ def perm_check(weights, biases, perm):
     ## REFINEMENT
 
     # Set up solver and vars
-    refined_solver = z3.Solver()
+    refined_solver = z3.SolverFor("LRA")
     # Stores the values going into each layer's transform in reverse order. First member stores
     # output.
     lyr_vars =  [[ z3.Real('lyr_%d_%d'%(num_lyrs, nn)) for nn in range(out_dim) ]]
@@ -319,6 +319,6 @@ if __name__ == '__main__':
     n = 100
     id_basis = [ [0]*i + [1] + [0]*(n-i-1) for i in range(n) ]
     vec = [ random.uniform(1, 100) for i in range(n) ]
-    rand_sp = [ [ random.uniform(1, 100) for i in range(n) ] for j in range((n*2)//3) ]
+    rand_sp = [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n//2) ]
     pf = timeit(push_forward_relu, rand_sp)
     print(pf[:4])
