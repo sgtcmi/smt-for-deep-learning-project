@@ -82,56 +82,124 @@ def pull_back_relu(left_space, right_space):
 
 
 
+# Old push forward using z3. This is way too slow.
+#def push_forward_relu(left_space):
+#    """
+#    Finds an affine subspace to the right of relu so that any vector in `left_space` affine space
+#    goes to it. Returns a basis of a larger space as a list of vecors. 
+#    """
+#
+#    n = len(left_space[0])
+#
+#    solver = z3.SolverFor("LRA")
+#
+#    # Coefficients for the basis of the affine space
+#    z3_lcf = [ z3.Real('lcf_%d'%i) for i in range(n) ]
+#
+#    # The vector on the left in the larger 
+#    z3_lvec = [ z3.Sum([ cf*lb[i] for cf, lb in zip(z3_lcf, left_space) ]) for i in range(n) ]
+#    solver.add(z3_lvec[-1] == 1)
+#
+#    # The vector to the right
+#    z3_rvec = [ z3.Real('rv_%d'%i) for i in range(n) ]
+#    for lvc, rvc in zip(z3_lvec, z3_rvec):
+#        solver.add(rvc == relu_expr(lvc))
+#
+#    right_basis = []
+#    z3_rcf = []
+#
+#    for i in range(n):
+#        solver.push()
+#        print('Adding basis %d'%i, end='\r')
+#
+#        # Linear independence conditions
+#        if len(right_basis) > 0:
+#            eq_expr = z3.Bool(True)
+#            for j in range(n):
+#                eq_expr = z3.And( eq_expr, z3_rvec[j] == z3.Sum([ cf * b[j] 
+#                                    for cf, b in zip(z3_rcf, right_basis) ]))
+#            solver.add(z3.Not(eq_expr))
+#
+#        if solver.check() == z3.sat:
+#            mdl = solver.model()
+#            right_basis.append([ mdl.eval(rvc) for rvc in z3_rvec ])
+#            z3_rcf.append(z3.Real('rcf_%d'%len(z3_rcf)))
+#        else:
+#            break
+#
+#        solver.pop()
+#
+#    print('\nPushforward complete')
+#
+#    return right_basis
+
+# New push forward
 def push_forward_relu(left_space):
     """
-    Finds an affine subspace to the right of relu so that any vector in `left_space` affine space
-    goes to it. Returns a basis of a larger space as a list of vecors. 
+    Finds an linear subspace to the right of relu so that any vector in `left_space` left space
+    goes to it. Returns a basis of the space as a list of vecors. `left_space` must be a list of
+    linearly indpenedent vectors giving a basis of the left space.
     """
-
+    
+    d = len(left_space)
     n = len(left_space[0])
-
+    
+    # Set up z3.
     solver = z3.SolverFor("LRA")
+    z3_coeffs = [ z3.Real("c_%d"%i) for i in range(d) ]
 
-    # Coefficients for the basis of the affine space
-    z3_lcf = [ z3.Real('lcf_%d'%i) for i in range(n) ]
-
-    # The vector on the left in the larger 
-    z3_lvec = [ z3.Sum([ cf*lb[i] for cf, lb in zip(z3_lcf, left_space) ]) for i in range(n) ]
-    solver.add(z3_lvec[-1] == 1)
-
-    # The vector to the right
-    z3_rvec = [ z3.Real('rv_%d'%i) for i in range(n) ]
-    for lvc, rvc in zip(z3_lvec, z3_rvec):
-        solver.add(rvc == relu_expr(lvc))
-
-    right_basis = []
-    z3_rcf = []
-
-    for i in range(n):
+    # Calculate the tie-classes of the relus
+    tie_class_reps = [0]
+    tie_class_vals = list(range(n))
+    for i in range(1, n):
+        print("Classifying ", i, end='\r', flush=True)    # DEBUG
         solver.push()
-        print('Adding basis %d'%i, end='\r')
-
-        # Linear independence conditions
-        if len(right_basis) > 0:
-            eq_expr = z3.Bool(True)
-            for j in range(n):
-                eq_expr = z3.And( eq_expr, z3_rvec[j] == z3.Sum([ cf * b[j] 
-                                    for cf, b in zip(z3_rcf, right_basis) ]))
-            solver.add(z3.Not(eq_expr))
-
-        if solver.check() == z3.sat:
-            mdl = solver.model()
-            right_basis.append([ mdl.eval(rvc) for rvc in z3_rvec ])
-            z3_rcf.append(z3.Real('rcf_%d'%len(z3_rcf)))
+        solver.add( 0 >= z3.Sum([ c*l[i] for c, l in zip(z3_coeffs, left_space) ]) )
+        cls = -1
+        for rep in tie_class_reps:
+            solver.push()
+            solver.add( 0 < z3.Sum([ c*l[rep] for c, l in zip(z3_coeffs, left_space) ]) )
+            if solver.check() == z3.unsat:
+                cls = rep
+                solver.pop()
+                break
+            solver.pop()
+        if cls == -1:
+            tie_class_reps.append(i)
         else:
-            break
-
+            tie_class_vals[i] = cls
         solver.pop()
+    print()
 
-    print('\nPushforward complete')
+    print(tie_class_reps, tie_class_vals) # DEBUG
 
-    return right_basis
-        
+    fb_basis = []
+
+    # If there are completely positive points in the left space, then those points exist in the
+    # right space
+    solver.reset()
+    solver.push()
+    for i in range(n):
+        solver.add( 0 <= z3.Sum([ c*l[i] for c, l in zip(z3_coeffs, left_space) ]) )
+    print("Checking completely positive points") #DEBUG
+    if solver.check() == z3.sat:
+        print("Completely positive points exist") #DEBUG
+        fb_basis = left_space[:]
+    solver.pop()
+
+    # Now, for each tie-class, we add basis generating that tie class
+    for rep, i in zip(tie_class_reps, range(len(tie_class_reps))):
+        for b, j in zip(left_space, range(len(left_space))):
+            print("Adding basis %d for tie-class %d"%(j, i), end='\r', flush=True)    #DEBUG
+            b_ = [ c if rv == rep else 0 for c, rv in zip(b, tie_class_vals) ]
+            if np.linalg.matrix_rank(np.asarray(fb_basis + [b_])) > len(fb_basis):
+                fb_basis.append(b_)
+                print("\nAdding basis")
+    print()
+
+    return fb_basis
+            
+
 
 
 
@@ -225,6 +293,7 @@ def perm_check(weights, biases, perm):
         post_lin_ints.append(out_basis)
         in_basis = push_forward_relu(out_basis)
 
+
     
     
     ## REFINEMENT
@@ -316,9 +385,14 @@ if __name__ == '__main__':
     from utils.misc import *
     import random
 
-    n = 100
+    n = 10
     id_basis = [ [0]*i + [1] + [0]*(n-i-1) for i in range(n) ]
     vec = [ random.uniform(1, 100) for i in range(n) ]
     rand_sp = [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n//2) ]
+    sp1 = [[1, 0, 0], [0, 1, -1]]
     pf = timeit(push_forward_relu, rand_sp)
-    print(pf[:4])
+    for b in pf:
+        for i in range(min(len(b), 10)):
+            print("%6.3f, "%b[i], end='')
+        print("..." if len(b) > 10 else "", flush=True)
+    print(push_forward_relu(sp1))
