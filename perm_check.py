@@ -10,6 +10,17 @@ import scipy.linalg as sp
 
 from utils import *
 
+"""
+Some constants to tune some heuristics
+
+pb-bsize        -   During pullback of a counterexample, there is a potentially very large space
+                    that needs to be searched. We reduce that by only taking pb-bsize many subsets
+                    of the basis set during pullback across relu, and finding counterexamples for
+                    each of these.
+pb-qrepn        -   For each pullback across the relu, a sat query is made that can produce multiple
+                    potential cexes. This parameter is the maximum number of cexes that we should
+                    consider
+
 
 
 #def relu_vecs(vec):
@@ -49,39 +60,65 @@ def incl_check(vec, space):
     return True
 
 
-def pull_back_relu(left_space, right_space):
-    """
-    Pull back `right_space` across relu to get a vecor in `left_space` that goes into
-    `right_space` through the relu. Both affine spaces are given by a list of basis vecors of a
-    linear space in a higher dimensional space, whose section where the last coordinate is 1 gives a
-    vector in the affine subspace. Returns True, vec if found, False, [] otherwise. If returned, the
-    last coordinate of the returned vec will be 1.
-    """
-    assert(len(left_space[0]) == len(right_space[0]))
+#def pull_back_relu(left_space, right_space):
+#    """
+#    Pull back `right_space` across relu to get a vecor in `left_space` that goes into
+#    `right_space` through the relu. Both affine spaces are given by a list of basis vecors of a
+#    linear space in a higher dimensional space, whose section where the last coordinate is 1 gives a
+#    vector in the affine subspace. Returns True, vec if found, False, [] otherwise. If returned, the
+#    last coordinate of the returned vec will be 1.
+#    """
+#    assert(len(left_space[0]) == len(right_space[0]))
+#
+#    tim = misc.TimePoint("pull_back_relu")
+#
+#
+#    solver = z3.SolverFor("LRA")
+#    z3_rc = [ z3.Real('rc_%d'%i) for i in range(len(right_space)) ]     # vector in right_space
+#    z3_lc = [ z3.Real('lc_%d'%i) for i in range(len(left_space)) ]     # vector in right_space
+#
+#    # constraints
+#    for i in range(len(left_space[0])):
+#        solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(z3_rc, right_space) ]) == 
+#                    relu_expr(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ])))
+#    solver.add(z3_lc[-1] == 1)
+#
+#    tim.time_point("Added constraints")
+#
+#    #TODO: Above takes a lot of time...?
+#
+#    print('Calling solver to pull back across relu with %d bases on the left, %d on right and %d \
+#            relus'%(len(left_space), len(right_space), len(left_space[0]))) #DEBUG
+#    if solver.check() == z3.unsat:
+#        tim.time_point("z3 call done")
+#        return False, []
+#    else:
+#        tim.time_point("z3 call done")
+#        mdl = solver.model()
+#        rvals = [ mdl.eval(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ]))
+#                            for i in range(len(left_space[0])) ]
+#        tim.time_point("Model probed")
+#        return True, [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
 
+def pull_back_relu(right_space):
 
     solver = z3.SolverFor("LRA")
-    z3_rc = [ z3.Real('rc_%d'%i) for i in range(len(right_space)) ]     # vector in right_space
-    z3_lc = [ z3.Real('lc_%d'%i) for i in range(len(left_space)) ]     # vector in right_space
+    z3_rc = [ z3.Real('rc_%d'%i) for i in range(len(right_space)) ]         # vector in right_space
+    z3_lv = [ z3.Real('lc_%d'%i) for i in range(len(right_space[0])) ]      # vector in left_space
+    for i in range(len(right_space[0])):
+        solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(z3_rc, right_space) ]) == relu_expr(z3_lv[i]))
+    solver.add(z3_lv[-1] == 1)
 
-    # constraints
-    for i in range(len(left_space[0])):
-        solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(z3_rc, right_space) ]) == 
-                    relu_expr(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ])))
-    solver.add(z3_lc[-1] == 1)
-
-    #TODO: Above takes a lot of time...?
-
-    print('Calling solver to pull back across relu with %d bases on the left, %d on right and %d \
-            relus'%(len(left_space), len(right_space), len(left_space[0]))) #DEBUG
+    print("Calling solver with %d nodes and %d bases"%(len(right_space[0]), len(right_space)))
     if solver.check() == z3.unsat:
         return False, []
     else:
         mdl = solver.model()
-        rvals = [ mdl.eval(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ]))
-                            for i in range(len(left_space[0])) ]
+        rvals = [ mdl.eval(v) for v in z3_lv ]
         return True, [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
 
+
+    
 
 
 # New push forward
@@ -361,7 +398,8 @@ if __name__ == '__main__':
     from utils.misc import *
     import random
 
-    n = 40
+    n = 300
+    k = 3
     #id_basis = [ [0]*i + [1] + [0]*(n-i-1) for i in range(n) ]
     #vec = [ random.uniform(1, 100) for i in range(n) ]
     #rand_sp = [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n//2) ]
@@ -375,6 +413,7 @@ if __name__ == '__main__':
 
     rand_left =     [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-2) ]
     rand_right =    [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-1) ]
-    pb = timeit(pull_back_relu, rand_left, rand_right)
+    rand_one =      [ [ random.uniform(1, 100) for i in range(n) ] for j in range(k)]
+    pb = timeit(pull_back_relu, rand_one)
     print("Pullback done")
     
