@@ -84,58 +84,6 @@ def pull_back_relu(left_space, right_space):
 
 
 
-# Old push forward using z3. This is way too slow.
-#def push_forward_relu(left_space):
-#    """
-#    Finds an affine subspace to the right of relu so that any vector in `left_space` affine space
-#    goes to it. Returns a basis of a larger space as a list of vecors. 
-#    """
-#
-#    n = len(left_space[0])
-#
-#    solver = z3.SolverFor("LRA")
-#
-#    # Coefficients for the basis of the affine space
-#    z3_lcf = [ z3.Real('lcf_%d'%i) for i in range(n) ]
-#
-#    # The vector on the left in the larger 
-#    z3_lvec = [ z3.Sum([ cf*lb[i] for cf, lb in zip(z3_lcf, left_space) ]) for i in range(n) ]
-#    solver.add(z3_lvec[-1] == 1)
-#
-#    # The vector to the right
-#    z3_rvec = [ z3.Real('rv_%d'%i) for i in range(n) ]
-#    for lvc, rvc in zip(z3_lvec, z3_rvec):
-#        solver.add(rvc == relu_expr(lvc))
-#
-#    right_basis = []
-#    z3_rcf = []
-#
-#    for i in range(n):
-#        solver.push()
-#        print('Adding basis %d'%i, end='\r')
-#
-#        # Linear independence conditions
-#        if len(right_basis) > 0:
-#            eq_expr = z3.Bool(True)
-#            for j in range(n):
-#                eq_expr = z3.And( eq_expr, z3_rvec[j] == z3.Sum([ cf * b[j] 
-#                                    for cf, b in zip(z3_rcf, right_basis) ]))
-#            solver.add(z3.Not(eq_expr))
-#
-#        if solver.check() == z3.sat:
-#            mdl = solver.model()
-#            right_basis.append([ mdl.eval(rvc).numerator_as_long() / mdl.eval(rvc).denominator_as_long() 
-#                                   for rvc in z3_rvec ])
-#            z3_rcf.append(z3.Real('rcf_%d'%len(z3_rcf)))
-#        else:
-#            break
-#
-#        solver.pop()
-#
-#    print('\nPushforward complete')
-#
-#    return right_basis
-
 # New push forward
 def push_forward_relu(left_space):
     """
@@ -301,7 +249,7 @@ def perm_check(weights, biases, perm):
     post_lin_ints = []          # Interpolants after going through linear transform
 
     # Linear inclusion loop
-    for w, b, lm, dm, curr_lyr in zip(weights, biases, jat_mat, jlt_mat, range(num_lyrs)):
+    for w, b, lm, curr_lyr in zip(weights, biases, jat_mat, range(num_lyrs)):
         print('Kernel check for layer ', curr_lyr+1)
         l = len(w[0])
 
@@ -334,7 +282,7 @@ def perm_check(weights, biases, perm):
         pre_lin_ints.append(in_basis)
         out_basis = out_basis.tolist()
         post_lin_ints.append(out_basis)
-        in_basis = push_forward_relu(out_basis)
+        in_basis = push_forward_relu(out_basis)     #TODO Confirm that out_basis is linearly ndependent
 
 
     
@@ -413,14 +361,20 @@ if __name__ == '__main__':
     from utils.misc import *
     import random
 
-    n = 10
-    id_basis = [ [0]*i + [1] + [0]*(n-i-1) for i in range(n) ]
-    vec = [ random.uniform(1, 100) for i in range(n) ]
-    rand_sp = [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n//2) ]
-    sp1 = [[1, 0, 0], [0, 1, -1]]
-    pf = timeit(push_forward_relu, rand_sp)
-    for b in pf:
-        for i in range(min(len(b), 10)):
-            print("%6.3f, "%b[i], end='')
-        print("..." if len(b) > 10 else "", flush=True)
-    print(push_forward_relu(sp1))
+    n = 40
+    #id_basis = [ [0]*i + [1] + [0]*(n-i-1) for i in range(n) ]
+    #vec = [ random.uniform(1, 100) for i in range(n) ]
+    #rand_sp = [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n//2) ]
+    #sp1 = [[1, 0, 0], [0, 1, -1]]
+    #pf = timeit(push_forward_relu, rand_sp)
+    #for b in pf:
+    #    for i in range(min(len(b), 10)):
+    #        print("%6.3f, "%b[i], end='')
+    #    print("..." if len(b) > 10 else "", flush=True)
+    #print(push_forward_relu(sp1))
+
+    rand_left =     [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-2) ]
+    rand_right =    [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-1) ]
+    pb = timeit(pull_back_relu, rand_left, rand_right)
+    print("Pullback done")
+    
