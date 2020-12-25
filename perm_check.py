@@ -72,7 +72,8 @@ def pull_back_relu(left_space, right_space):
 
     #TODO: Above takes a lot of time...?
 
-    print('Calling solver to pull back across relu') #DEBUG
+    print('Calling solver to pull back across relu with %d bases on the left, %d on right and %d \
+            relus'%(len(left_space), len(right_space), len(left_space[0]))) #DEBUG
     if solver.check() == z3.unsat:
         return False, []
     else:
@@ -223,12 +224,17 @@ def pull_back_cex_explore(weights, biases, inp_dim,
     """
 
     print('Attempting pullback.')
-    cex = cex_basis[0]
+    print(list(map(lambda x: len(x[0]), pre_lin_ints))) #DEBUG
+    print(list(map(lambda x: len(x[0]), post_lin_ints))) #DEBUG
+    print(list(map(len, biases))) #DEBUG
+    print(len(cex_basis[0]))
     suc = True
-    for idx in range(curr_lyr - 1, 0, -1):
+    for idx in reversed(range(curr_lyr)):
         prel = pre_lin_ints[idx]
         pstl = post_lin_ints[idx]
+        b = biases[idx]
         
+        print(len(pstl[0]), len(cex_basis[0]))
         suc, cex = pull_back_relu(pstl, cex_basis)
         if not suc:
             print('failed')
@@ -238,18 +244,21 @@ def pull_back_cex_explore(weights, biases, inp_dim,
         cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
         npcex = np.asarray(cex)
         print(type(jlt_mat[idx]), type(jlt_mat[idx][0][0]), type(npcex), jlt_mat[idx].dtype,
-                npcex.dtype, type(cex), type(cex[0]))
-        print(cex)
+                npcex.dtype, type(cex), type(cex[0]))#DEBUG
+        print(cex) #DEBUG
         sl0, _, _, _ = sp.lstsq(np.transpose(jlt_mat[idx]), npcex)
-        cex_basis = [ r + [0] for r in jlt_krn[idx] ] + [sl0 + [1]]
+        print("Linear pullback point dimension ", len(sl0)) #DEBUG
+        cex_basis = [ r + [0] for r in jlt_krn[idx].tolist() ] + [sl0.tolist() + [1]]
 
     print('success')
 
     # Check if true cex
+    cex = cex_basis[0]
+    print(len(cex), len(weights[0]), inp_dim, len(cex_basis[0]))   #DEBUG
     if suc and not encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) == \
             encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
         print('Found CEX')
-        return True, cex[:inp_dim] #DEBUG
+        return True, cex[:inp_dim]
     print('CEX is spurious')
     return False, [] 
 
@@ -318,6 +327,7 @@ def perm_check(weights, biases, perm):
 
             if suc:
                 #return False, cex #DEBUG
+                pass
 
         # Save these interpolants, and get next ones
         print('Looking for affine interpolant for next layer')
@@ -383,6 +393,7 @@ def perm_check(weights, biases, perm):
                                             pre_lin_ints, post_lin_ints, i, cex_basis)
             if suc:
                 #return False, cex       #DEBUG
+                pass
 
 
 
