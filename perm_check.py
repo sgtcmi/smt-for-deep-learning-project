@@ -77,8 +77,9 @@ def pull_back_relu(left_space, right_space):
         return False, []
     else:
         mdl = solver.model()
-        return True, [ mdl.eval(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ]))
+        rvals = [ mdl.eval(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ]))
                             for i in range(len(left_space[0])) ]
+        return True, [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
 
 
 
@@ -122,7 +123,8 @@ def pull_back_relu(left_space, right_space):
 #
 #        if solver.check() == z3.sat:
 #            mdl = solver.model()
-#            right_basis.append([ mdl.eval(rvc) for rvc in z3_rvec ])
+#            right_basis.append([ mdl.eval(rvc).numerator_as_long() / mdl.eval(rvc).denominator_as_long() 
+#                                   for rvc in z3_rvec ])
 #            z3_rcf.append(z3.Real('rcf_%d'%len(z3_rcf)))
 #        else:
 #            break
@@ -200,6 +202,57 @@ def push_forward_relu(left_space):
     return fb_basis
             
 
+def pull_back_cex_explore(weights, biases, inp_dim,
+                            jlt_mat, jlt_krn, 
+                            pre_lin_ints, post_lin_ints, 
+                            curr_lyr, cex_basis):
+    """
+    Given a basis of potential counterexamples at any layer, pulls the cex back over the network
+    to the input layer and checks if the cex is true or spurious. The arguments are:
+
+    weights, biases     -   Weights and biases of the network
+    jlt_mat, jlt_krn    -   Matrices giving the joint linear transform, and their kernels for each
+                            layer
+    pre_lin_ints, 
+    post_lin_ints       -   The interpolants derived for each layer, given as an affine space feeding into
+                            the joint affine transform, and the corresponding affine space emerging
+                            from the joint affine transform
+    curr_lyr            -   The layer at which the potential counterexample basis was produced
+    cex_basis           -   The potential counterexample basis
+
+    """
+
+    print('Attempting pullback.')
+    cex = cex_basis[0]
+    suc = True
+    for idx in range(curr_lyr - 1, 0, -1):
+        prel = pre_lin_ints[idx]
+        pstl = post_lin_ints[idx]
+        
+        suc, cex = pull_back_relu(pstl, cex_basis)
+        if not suc:
+            print('failed')
+            break
+        
+        # Pull back over affine transform using kernel
+        cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
+        npcex = np.asarray(cex)
+        print(type(jlt_mat[idx]), type(jlt_mat[idx][0][0]), type(npcex), jlt_mat[idx].dtype,
+                npcex.dtype, type(cex), type(cex[0]))
+        print(cex)
+        sl0, _, _, _ = sp.lstsq(np.transpose(jlt_mat[idx]), npcex)
+        cex_basis = [ r + [0] for r in jlt_krn[idx] ] + [sl0 + [1]]
+
+    print('success')
+
+    # Check if true cex
+    if suc and not encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) == \
+            encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
+        print('Found CEX')
+        return True, cex[:inp_dim] #DEBUG
+    print('CEX is spurious')
+    return False, [] 
+
 
 
 
@@ -212,14 +265,12 @@ def perm_check(weights, biases, perm):
 
     # Represent affine transforms as matrices in a larger space
     # Joint weight matrix
-    dmat = [ np.matrix([r + [0]*len(w[0]) for r in w] + [[0]*len(w[0]) + r for r in w]) for w,b in zip(weights,biases) ]
+    jlt_mat = [ np.matrix([r + [0]*len(w[0]) for r in w] + [[0]*len(w[0]) + r for r in w]) for w,b in zip(weights,biases) ]
     # Joint affine transform
-    lmat = [ np.matrix([r + [0]*len(w[0]) + [0] for r in w] + [[0]*len(w[0]) + r + [0] for r in w] + [b + b + [1]])
+    jat_mat = [ np.matrix([r + [0]*len(w[0]) + [0] for r in w] + [[0]*len(w[0]) + r + [0] for r in w] + [b + b + [1]])
                     for w,b in zip(weights,biases) ]
-    # Kernels of joint weight matrix
-    dkrn = [ np.transpose(sp.null_space(np.transpose(dm))) for dm in dmat]
-    # Natrural inclusion of above kernels into higher space
-    lkrn_p = [ [ r.tolist() + [0] for r in dk] for dk in dkrn]
+    # Kernels of joint weight matrices
+    jlt_krn = [ np.transpose(sp.null_space(np.transpose(dm))) for dm in jlt_mat]
 
     # Stats
     inp_dim = len(weights[0])
@@ -241,7 +292,7 @@ def perm_check(weights, biases, perm):
     post_lin_ints = []          # Interpolants after going through linear transform
 
     # Linear inclusion loop
-    for w, b, lm, dm, curr_lyr in zip(weights, biases, lmat, dmat, range(num_lyrs)):
+    for w, b, lm, dm, curr_lyr in zip(weights, biases, jat_mat, jlt_mat, range(num_lyrs)):
         print('Kernel check for layer ', curr_lyr+1)
         l = len(w[0])
 
@@ -262,29 +313,11 @@ def perm_check(weights, biases, perm):
             # This is the affine subspace from which we will pix cexs.
             cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if np.count_nonzero(eb) > 0]
 
-            # Pull back cex
-            print('Attempting pullback....', end='')
-            cex = cex_basis[0]
-            for prel, pstl, idx in zip(reversed(pre_lin_ints), reversed(post_lin_ints),
-                                        reversed(range(curr_lyr))):
-                suc, cex = pull_back_relu(pstl, cex_basis)
-                if not suc:
-                    print('failed')
-                    break
-                
-                # Pull back over affine transform using kernel
-                cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
-                sl0, _, _, _ = sp.lstsq(np.transpose(dmat[idx]), np.asarray(cex))
-                cex_basis = lkrn_p[idx] + [sl0 + [1]]
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, jlt_mat, jlt_krn,
+                                            pre_lin_ints, post_lin_ints, curr_lyr, cex_basis)
 
-            print('success') 
-            
-            # Check if true cex
-            if not encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) == \
-                    encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
-                print('Found CEX')
-                #return False, cex[:inp_dim] #DEBUG
-            print('CEX is spurious')
+            if suc:
+                #return False, cex #DEBUG
 
         # Save these interpolants, and get next ones
         print('Looking for affine interpolant for next layer')
@@ -340,32 +373,16 @@ def perm_check(weights, biases, perm):
 
             mdl = refined_solver.model()
             # The cex is a single point in the joint affine space at the begining of the current
-            # layer, and that can be represented by the follwing point
-            cex_basis = [ list(map(mdl.eval, lyr_vars[-1])) + list(map(mdl.eval, lyr_vars_p[-1])) +
-                            [1] ]
+            # layer, and that can be represented by the follwing line 
+            cex_basis = [   list(map(mdl.eval, lyr_vars[-1])) + 
+                            list(map(mdl.eval, lyr_vars_p[-1])) ]
+            cex_basis[0] = [ v.numerator_as_long()/v.denominator_as_long() for v in cex_basis[0]]\
+                            + [1]
             
-            # Pull back cex
-            cex = cex_basis[0]
-            for prel, pstl, idx in zip(reversed(pre_lin_ints[:i+1]), reversed(post_lin_ints[:i+1]),
-                                        reversed(range(curr_lyr))):
-                suc, cex = pull_back_relu(pstl, cex_basis)
-                if not suc:
-                    print('failed')
-                    break
-                
-                # Pull back over affine transform using kernel
-                cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
-                sl0, _, _, _ = sp.lstsq(np.transpose(dmat[idx]), np.asarray(cex))
-                cex_basis = lkrn_p[idx] + [sl0 + [1]]
-
-            print('success') 
-            
-            # Check if true cex, TODO: check if this should always return true, if so optimise
-            if not encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) == \
-                    encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
-                print('Found CEX')
-                #return False, cex[:inp_dim] #DEBUG
-            print('CEX is spurious')
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, jlt_mat, jlt_krn,
+                                            pre_lin_ints, post_lin_ints, i, cex_basis)
+            if suc:
+                #return False, cex       #DEBUG
 
 
 
@@ -373,7 +390,7 @@ def perm_check(weights, biases, perm):
     
             
     return #DEBUG
-    #TODO complete
+    #TODO linear constraints on input
         
 
 
