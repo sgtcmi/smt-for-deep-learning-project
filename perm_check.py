@@ -28,12 +28,15 @@ pb_nqueries = 1
 
 relu_expr = lambda z: z3.If(z >= 0, z, 0)
 
-def check_cex(weights, biases, perm, cex):
+def check_cex(weights, biases, perm, prc_eq, cex):
     """
     Check if given cex violates invariance of given network under given permutation. Returns True if
     it does, False otherwise
     """
     assert len(weights[0]) == len(perm) and len(cex) == len(perm)
+    for eq in prc_eq:
+        if sum([ c*v for c, v in zip(cex, eq[:-1]) ]) != eq[-1]:
+            return False
     return encode_dnn.eval_dnn(weights, biases, cex) != \
                 encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])
 
@@ -173,7 +176,8 @@ class ReluPullbackIterator:
 
            
 
-def pull_back_cex_explore(weights, biases, inp_dim, perm,
+def pull_back_cex_explore(weights, biases, inp_dim, 
+                            perm, prc_eq,
                             jlt_mat, jlt_krn, 
                             pre_lin_ints, post_lin_ints, 
                             curr_lyr, cex_basis):
@@ -184,6 +188,7 @@ def pull_back_cex_explore(weights, biases, inp_dim, perm,
     weights, biases     -   Weights and biases of the network
     inp_dim             -   Dimensions of the input to the nn
     perm                -   Permutation to validate final cex against
+    prc_eq              -   The precondition equations on the input
     jlt_mat, jlt_krn    -   Matrices giving the joint linear transform, and their kernels for each
                             layer
     pre_lin_ints, 
@@ -214,7 +219,7 @@ def pull_back_cex_explore(weights, biases, inp_dim, perm,
             cex_basis = [ r + [0] for r in jlt_krn[idx].tolist() ] + [sl0.tolist() + [1]]
 
             # Pull back obtained basis in lower layers, return if something is found
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, jlt_mat, jlt_krn, pre_lin_ints,
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn, pre_lin_ints,
                                                 post_lin_ints, idx, cex_basis)
             if suc:
                 return True, cex
@@ -224,19 +229,62 @@ def pull_back_cex_explore(weights, biases, inp_dim, perm,
     else:
 
         print('Pullback reached layer 0')
+        if len(prc_eq) > 0:
 
-        # Check if any basis is a true cex
-        for cex in cex_basis:
-            if check_cex(weights, biases, perm, cex[:inp_dim]):
-                print('Found CEX')
-                return True, cex[:inp_dim]
+            # DEBUG
+            cx_mat = np.transpose(np.matrix([ r[:inp_dim] + [r[-1]] for r in cex_basis ]))
+            eq_mat = np.matrix([ r[:-1] + [-r[-1]] for r in prc_eq ])
+            n_cex_b = np.transpose(cx_mat * sp.null_space(eq_mat * cx_mat)).tolist()
+            allz = True
+            for r, bi in zip(n_cex_b, range(len(n_cex_b))):
+                if r[-1] != 0:
+                    allz = False
+                    assert(False)
+                    break
+            if allz:
+                print("All last components are 0!")
+
+
+            # Use z3 to find a cex
+            # Set up solver and constraints
+            solver = z3.SolverFor("LRA")
+            cex_cffs = [ z3.Real("cxcf_%d"%i) for i in range(len(cex_basis)) ]
+            #solver.add( z3.Sum([ cf*b[-1] for cf, b in zip(cex_cffs, cex_basis) ]) == 1 )
+            cex_cmps = [ z3.Sum([ cf*b[i] for cf, b in zip(cex_cffs, cex_basis) ]) 
+                                            for i in range(inp_dim) ]
+            for eq in prc_eq:
+                solver.add( z3.Sum([ cp*ec for cp, ec in zip(cex_cmps, eq[:-1]) ]) == eq[-1] )
+            
+            # Make upto pb_nqueries queries
+            for qn in range(pb_nqueries):
+                if solver.check == z3.sat:
+                    print("Potential CEX")
+                    mdl = solver.model()
+                    z3_cex = [ mdl.eval(cp) for cp in cex_cmps ]
+                    cex = [ z.numerator_as_long() / z.denominator_as_long() for z in z3_cex ]
+                    if check_cex(weights, biases, perm, prc_eq, cex):
+                        print('Found CEX')
+                        return True, cex
+                    else:
+                        solver.add( z3.Not( z3.And([ cp == cx for cp, cx in zip(cex_cmps, z3_cex)
+                            ])))
+                else:
+                    print("Found no CEX at layer 0")
+                    return False, []
+
+        else:
+            # Check if any basis is a true cex
+            for cex in cex_basis:
+                if check_cex(weights, biases, perm, prc_eq, cex[:inp_dim]):
+                    print('Found CEX')
+                    return True, cex[:inp_dim]
         print('CEX is spurious')
         return False, [] 
 
 
 
 
-def perm_check(weights, biases, perm): #, prc_eq):
+def perm_check(weights, biases, perm, prc_eq):
     """
     Check if DNN given by the `weights` and `biases` is invariant under the given `perm`utation. The
     other arguments are:
@@ -244,6 +292,8 @@ def perm_check(weights, biases, perm): #, prc_eq):
                         a list of rows, each row [a1, a2, ... an, b] specifies the equation a1.x1 +
                         a2.x2 + ... an.xn = b.
     """
+    print(prc_eq)        #DEBUG
+
     # Numbers
     inp_dim = len(weights[0])
     out_dim = len(biases[-1])
@@ -251,12 +301,22 @@ def perm_check(weights, biases, perm): #, prc_eq):
 
     # Generate basis representing permutation constraint in the larger space
     in_basis = []
-    for i in range(inp_dim):
-        b = [0]*(inp_dim*2)
-        b[i] = 1
-        b[perm[i] + inp_dim] = -1
-        in_basis.append(b + [0])
-    in_basis.append((inp_dim*2)*[0] + [1])
+    if(len(prc_eq) > 0):
+        prc_a = np.matrix([ r[:-1] for r in prc_eq])
+        prc_b = np.asarray([r[-1] for r in prc_eq])
+        prc_eq_krn = np.transpose(sp.null_space(prc_a)).tolist()
+        prc_eq_s0, _, _, _ = sp.lstsq(prc_a, prc_b)
+        prc_eq_s0 = prc_eq_s0.tolist()
+        print(len(prc_eq_krn), len(prc_eq_krn[0]), len(prc_eq), len(prc_eq[0])) #DEBUG
+        in_basis = [ r + [r[p] for p in perm] + [0] for r in prc_eq_krn] + \
+                    [ prc_eq_s0 + [prc_eq_s0[p] for p in perm] + [1] ]
+    else:
+        for i in range(inp_dim):
+            b = [0]*(inp_dim*2)
+            b[i] = 1
+            b[perm[i] + inp_dim] = -1
+            in_basis.append(b + [0])
+        in_basis.append((inp_dim*2)*[0] + [1])
     print(len(in_basis), len(in_basis[0]))
 
 
@@ -285,31 +345,31 @@ def perm_check(weights, biases, perm): #, prc_eq):
         # Find image of in_basis under space. Ensure generated out_basis is linearly independent
         out_basis = []
         for b in in_basis:
-            ob = (np.array(b) * lm).tolist()[0]
+            ob = (np.array(b) @ lm).tolist()[0]
             _r = np.linalg.matrix_rank(np.asarray(out_basis + [ob]))
             if _r > len(out_basis):
                 out_basis.append(ob)
         out_basis = np.matrix(out_basis)
 
         # Check linear inclusion by finding subbasis of input basis that does not go to 0
-        eq_basis  = out_basis           * np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
+        eq_basis  = out_basis           @ np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
                                                     [[0]*i + [-1] + [0]*(l-i-1) for i in range(l)] +
                                                     [[0]*l])
 
-        if np.count_nonzero(eq_basis) == 0:
+        if np.allclose(eq_basis, 0):
             print('Verified at layer via linear inclusion ', curr_lyr+1)
-            #return True, [] #DEBUG
+            return True, [] 
         else:
             print('Linear inclusion failed at layer ', curr_lyr+1)
             
             # This is the affine subspace from which we will pix cexs.
-            cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if np.count_nonzero(eb) > 0]
+            cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if not np.allclose(eb, 0) ]
 
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, jlt_mat, jlt_krn,
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn,
                                             pre_lin_ints, post_lin_ints, curr_lyr, cex_basis)
 
             if suc:
-                #return False, cex #DEBUG
+                return False, cex #DEBUG
                 pass
 
         # Save these interpolants, and get next ones
@@ -335,7 +395,7 @@ def perm_check(weights, biases, perm): #, prc_eq):
 
     # Refinement Loop
     for itp, w, b, i in zip(reversed(pre_lin_ints), reversed(weights), reversed(biases),
-                            range(num_lyrs - 1, 0, -1)):
+                            reversed(range(num_lyrs))):
         print("Refining layer %d"%i)
 
         # Encode layers
@@ -360,11 +420,11 @@ def perm_check(weights, biases, perm): #, prc_eq):
                                                                     zip(itp_cffs, itp) ]))
         refined_solver.add( 1 == z3.Sum([ ic * it[-1] for ic, it in zip(itp_cffs, itp) ]))
 
-        continue #DEBUG
+        #continue #DEBUG
 
         if refined_solver.check() == z3.unsat:
             print("Verified via refinement at layer %d")
-            #return True, [] #DEBUG
+            return True, [] #DEBUG
         else:
             print('Found potential cex, attempting pullback....', end='')
 
@@ -376,19 +436,15 @@ def perm_check(weights, biases, perm): #, prc_eq):
             cex_basis[0] = [ v.numerator_as_long()/v.denominator_as_long() for v in cex_basis[0]]\
                             + [1]
             
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, jlt_mat, jlt_krn,
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn,
                                             pre_lin_ints, post_lin_ints, i, cex_basis)
             if suc:
-                #return False, cex       #DEBUG
+                return False, cex       #DEBUG
                 pass
 
-
-
-        
     
             
-    return #DEBUG
-    #TODO linear constraints on input
+    assert(False) #We should never reach here
         
 
 

@@ -123,8 +123,15 @@ if res:
 else:
     print('Not verified, model: ', mdl)
 
+
+# Exacly one of each of the triplets representing what move a cell has is one. We express this by
+# saying that the sum of the values of those inputs is 1. Similarly, the sum of the inputs
+# representing the move is 1.
+lin_conds = [ [0]*(3*i) + [1, 1, 1] + [0]*(36-3*(i+1)) + [1] for i in range(9) ] + [ [0]*27 + [1]*10 ]
+
+
 print('Perm Check')
-res, mdl = perm_check(weights, biases, perm)
+res, mdl = perm_check(weights, biases, perm, lin_conds)
 
 if res:
     print('Verified')
