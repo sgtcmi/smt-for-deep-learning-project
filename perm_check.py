@@ -28,19 +28,14 @@ pb_nqueries = 1
 
 relu_expr = lambda z: z3.If(z >= 0, z, 0)
 
-def unit_vec(vec):
-    """ 
-    Convert a vector as a list of floats to a unit vector
+def check_cex(weights, biases, perm, cex):
     """
-    size = sqrt(fsum(map(lambda x: x**2, vec)))
-    return list(map(lambda x: x/size, vec))
-
-def dot_prod(v1, v2):
+    Check if given cex violates invariance of given network under given permutation. Returns True if
+    it does, False otherwise
     """
-    Dot product of two vectors as lists of vectors
-    """
-    return fsum(( v1e*v2e for v1e, v2e in zip(v1, v2)))
-
+    assert len(weights[0]) == len(perm) and len(cex) == len(perm)
+    return encode_dnn.eval_dnn(weights, biases, cex) != \
+                encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])
 
 
 
@@ -124,7 +119,7 @@ class ReluPullbackIterator:
         self.d = len(right_space)
         self.n = len(right_space[0])
         self.r = min(self.d, pb_nbasis)
-        self.k = factorial(self.n) // (factorial(self.r) * factorial(self.n-self.r))
+        self.k = factorial(self.d) // (factorial(self.r) * factorial(self.d-self.r))
 
         # Set up solver
         self.solver = z3.SolverFor("LRA")
@@ -151,9 +146,12 @@ class ReluPullbackIterator:
             # Repeat iteration until something is returned, or StopIteration is raised
             if self.qn >= pb_nqueries:
                 # To next basis combination
+                print("Resetting, too many queries")
                 self.solver.reset()
                 self.sbn += 1
-                subb = next(self.subb_cmb) # This should raise StopIteration
+                subb = next(self.subb_cmb)
+                #try:
+                
                 for i in range(self.n):
                     self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb ]) == relu_expr(self.z3_lv[i]))
                 self.qn = 0
@@ -175,7 +173,7 @@ class ReluPullbackIterator:
 
            
 
-def pull_back_cex_explore(weights, biases, inp_dim,
+def pull_back_cex_explore(weights, biases, inp_dim, perm,
                             jlt_mat, jlt_krn, 
                             pre_lin_ints, post_lin_ints, 
                             curr_lyr, cex_basis):
@@ -184,6 +182,8 @@ def pull_back_cex_explore(weights, biases, inp_dim,
     to the input layer and checks if the cex is true or spurious. The arguments are:
 
     weights, biases     -   Weights and biases of the network
+    inp_dim             -   Dimensions of the input to the nn
+    perm                -   Permutation to validate final cex against
     jlt_mat, jlt_krn    -   Matrices giving the joint linear transform, and their kernels for each
                             layer
     pre_lin_ints, 
@@ -214,7 +214,7 @@ def pull_back_cex_explore(weights, biases, inp_dim,
             cex_basis = [ r + [0] for r in jlt_krn[idx].tolist() ] + [sl0.tolist() + [1]]
 
             # Pull back obtained basis in lower layers, return if something is found
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, jlt_mat, jlt_krn, pre_lin_ints,
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, jlt_mat, jlt_krn, pre_lin_ints,
                                                 post_lin_ints, idx, cex_basis)
             if suc:
                 return True, cex
@@ -227,8 +227,7 @@ def pull_back_cex_explore(weights, biases, inp_dim,
 
         # Check if any basis is a true cex
         for cex in cex_basis:
-            if encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) != \
-                encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
+            if check_cex(weights, biases, perm, cex[:inp_dim]):
                 print('Found CEX')
                 return True, cex[:inp_dim]
         print('CEX is spurious')
@@ -237,23 +236,15 @@ def pull_back_cex_explore(weights, biases, inp_dim,
 
 
 
-def perm_check(weights, biases, perm):
+def perm_check(weights, biases, perm): #, prc_eq):
     """
-    Check if DNN given by the `weights` and `biases` is invariant under the given `perm`utation.
+    Check if DNN given by the `weights` and `biases` is invariant under the given `perm`utation. The
+    other arguments are:
+    prc_eq          -   A set of linear equalities giving a precondition on the input. Specified as
+                        a list of rows, each row [a1, a2, ... an, b] specifies the equation a1.x1 +
+                        a2.x2 + ... an.xn = b.
     """
-
-    ## ABSTRACTION
-
-    # Represent affine transforms as matrices in a larger space
-    # Joint weight matrix
-    jlt_mat = [ np.matrix([r + [0]*len(w[0]) for r in w] + [[0]*len(w[0]) + r for r in w]) for w,b in zip(weights,biases) ]
-    # Joint affine transform
-    jat_mat = [ np.matrix([r + [0]*len(w[0]) + [0] for r in w] + [[0]*len(w[0]) + r + [0] for r in w] + [b + b + [1]])
-                    for w,b in zip(weights,biases) ]
-    # Kernels of joint weight matrices
-    jlt_krn = [ np.transpose(sp.null_space(np.transpose(dm))) for dm in jlt_mat]
-
-    # Stats
+    # Numbers
     inp_dim = len(weights[0])
     out_dim = len(biases[-1])
     num_lyrs = len(weights)
@@ -267,7 +258,21 @@ def perm_check(weights, biases, perm):
         in_basis.append(b + [0])
     in_basis.append((inp_dim*2)*[0] + [1])
     print(len(in_basis), len(in_basis[0]))
+
+
     
+
+    ## ABSTRACTION
+
+    # Represent affine transforms as matrices in a larger space
+    # Joint weight matrix
+    jlt_mat = [ np.matrix([r + [0]*len(w[0]) for r in w] + [[0]*len(w[0]) + r for r in w]) for w,b in zip(weights,biases) ]
+    # Joint affine transform
+    jat_mat = [ np.matrix([r + [0]*len(w[0]) + [0] for r in w] + [[0]*len(w[0]) + r + [0] for r in w] + [b + b + [1]])
+                    for w,b in zip(weights,biases) ]
+    # Kernels of joint weight matrices
+    jlt_krn = [ np.transpose(sp.null_space(np.transpose(dm))) for dm in jlt_mat]
+
     # Track interpolants
     pre_lin_ints = []           # Interpolants
     post_lin_ints = []          # Interpolants after going through linear transform
@@ -300,7 +305,7 @@ def perm_check(weights, biases, perm):
             # This is the affine subspace from which we will pix cexs.
             cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if np.count_nonzero(eb) > 0]
 
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, jlt_mat, jlt_krn,
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, jlt_mat, jlt_krn,
                                             pre_lin_ints, post_lin_ints, curr_lyr, cex_basis)
 
             if suc:
@@ -371,7 +376,7 @@ def perm_check(weights, biases, perm):
             cex_basis[0] = [ v.numerator_as_long()/v.denominator_as_long() for v in cex_basis[0]]\
                             + [1]
             
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, jlt_mat, jlt_krn,
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, jlt_mat, jlt_krn,
                                             pre_lin_ints, post_lin_ints, i, cex_basis)
             if suc:
                 #return False, cex       #DEBUG
