@@ -358,10 +358,10 @@ def perm_check(weights, biases, perm, prc_eq):
             _r = np.linalg.matrix_rank(np.asarray(out_basis + [ob]))
             if _r > len(out_basis):
                 out_basis.append(ob)
-        out_basis = np.matrix(out_basis)
 
         # Check linear inclusion by finding subbasis of input basis that does not go to 0
-        eq_basis  = out_basis           @ np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
+        eq_basis = np.matrix(in_basis) @ jat_mat
+                                        @ np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
                                                     [[0]*i + [-1] + [0]*(l-i-1) for i in range(l)] +
                                                     [[0]*l])
 
@@ -370,9 +370,18 @@ def perm_check(weights, biases, perm, prc_eq):
             return True, [] 
         else:
             print('Linear inclusion failed at layer ', curr_lyr+1)
+
+            # To find the worst offenders in the in_basis space for eq being non zero, we are
+            # interested in the "reverse kernel", or the perpendicular space to the kernel. This is
+            # a space of coefficients to the basis, and we apply them to the basis to get required
+            # space.
+            cex_basis = (np.transpose(np.null_space(                             # Image of perp space of
+                        np.transpose(sp.null_space(np.transpose(eq_basis))))) \ 
+                        @ np.matrix(in_basis)).tolist()
+
             
             # This is the affine subspace from which we will pix cexs.
-            cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if not np.allclose(eb, 0) ]
+            #cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if not np.allclose(eb, 0) ]
 
             suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn,
                                             pre_lin_ints, post_lin_ints, curr_lyr, cex_basis)
