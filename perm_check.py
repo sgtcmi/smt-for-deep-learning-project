@@ -3,6 +3,7 @@ Use the algo to check for permutations
 """
 from math import *
 import time #PROFILE
+import itertools as itr
 
 import z3
 import numpy as np
@@ -13,14 +14,16 @@ from utils import *
 """
 Some constants to tune some heuristics
 
-pb-bsize        -   During pullback of a counterexample, there is a potentially very large space
-                    that needs to be searched. We reduce that by only taking pb-bsize many subsets
-                    of the basis set during pullback across relu, and finding counterexamples for
-                    each of these.
-pb-qrepn        -   For each pullback across the relu, a sat query is made that can produce multiple
+pb_nbasis       -   During pullback of a counterexample, there is a potentially very large space
+                   that needs to be searched. We reduce that by only taking pb-bsize many subsets
+                   of the basis set during pullback across relu, and finding counterexamples for
+                   each of these.
+pb_nqueries     -   For each pullback across the relu, a sat query is made that can produce multiple
                     potential cexes. This parameter is the maximum number of cexes that we should
                     consider
-
+"""
+pb_nbasis = 2
+pb_nqueries = 1
 
 
 #def relu_vecs(vec):
@@ -101,21 +104,46 @@ def incl_check(vec, space):
 #        return True, [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
 
 def pull_back_relu(right_space):
+    """
+    Given a space to the right of a relu, generates points to the left that go to inside that space
+    under the relu
+    """
+    d = len(right_space)
+    n = len(right_space[0])
 
+    # Set up solver
     solver = z3.SolverFor("LRA")
-    z3_rc = [ z3.Real('rc_%d'%i) for i in range(len(right_space)) ]         # vector in right_space
-    z3_lv = [ z3.Real('lc_%d'%i) for i in range(len(right_space[0])) ]      # vector in left_space
-    for i in range(len(right_space[0])):
-        solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(z3_rc, right_space) ]) == relu_expr(z3_lv[i]))
+    z3_rc = [ z3.Real('rc_%d'%i) for i in range(d) ]        # vector in right_space
+    z3_lv = [ z3.Real('lc_%d'%i) for i in range(n) ]        # vector in left_space
     solver.add(z3_lv[-1] == 1)
 
-    print("Calling solver with %d nodes and %d bases"%(len(right_space[0]), len(right_space)))
-    if solver.check() == z3.unsat:
-        return False, []
-    else:
-        mdl = solver.model()
-        rvals = [ mdl.eval(v) for v in z3_lv ]
-        return True, [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
+    r = min(d, pb_nbasis)
+    k = factorial(n) // (factorial(r) * factorial(n-r))
+    for subb, sbn in zip(itr.combinations(zip(z3_rc, right_space), r), range(k)):
+        solver.push()
+        
+        # Add constraints
+        for i in range(n):
+            solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb ]) == relu_expr(z3_lv[i]))
+
+        # Call solver for pb_nqueries number of cexes
+        for i in range(pb_nqueries):
+            print("Calling solver with %d nodes and %d bases for combination %d of %d, query %d of %d"%(n, 
+                r, sbn, k, i, pb_nqueries), end ='\r')
+
+            if solver.check() == z3.sat:
+                mdl = solver.model()
+                rvals = [ mdl.eval(v) for v in z3_lv ]
+                cex = [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
+                solver.add( z3.Not( z3.And([ lv == c for lv, c in zip(z3_lv, cex) ])))
+                yield cex
+            else:
+                break
+        
+        solver.pop()
+    
+    print()
+    return
 
 
     
@@ -208,44 +236,53 @@ def pull_back_cex_explore(weights, biases, inp_dim,
 
     """
 
-    print('Attempting pullback.')
+    print('Attempting pullback at layer %d'%curr_lyr)   #DEBUG
     print(list(map(lambda x: len(x[0]), pre_lin_ints))) #DEBUG
     print(list(map(lambda x: len(x[0]), post_lin_ints))) #DEBUG
     print(list(map(len, biases))) #DEBUG
     print(len(cex_basis[0]))
+    
     suc = True
-    for idx in reversed(range(curr_lyr)):
+    if curr_lyr > 0:
+        idx = curr_lyr-1
         prel = pre_lin_ints[idx]
         pstl = post_lin_ints[idx]
         b = biases[idx]
         
-        print(len(pstl[0]), len(cex_basis[0]))
-        suc, cex = pull_back_relu(pstl, cex_basis)
-        if not suc:
-            print('failed')
-            break
+        print(len(pstl[0]), len(cex_basis[0])) #DEBUG
+        # iterate over pull backs across the relu in this layer
+        for cex in pull_back_relu(cex_basis):
         
-        # Pull back over affine transform using kernel
-        cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
-        npcex = np.asarray(cex)
-        print(type(jlt_mat[idx]), type(jlt_mat[idx][0][0]), type(npcex), jlt_mat[idx].dtype,
-                npcex.dtype, type(cex), type(cex[0]))#DEBUG
-        print(cex) #DEBUG
-        sl0, _, _, _ = sp.lstsq(np.transpose(jlt_mat[idx]), npcex)
-        print("Linear pullback point dimension ", len(sl0)) #DEBUG
-        cex_basis = [ r + [0] for r in jlt_krn[idx].tolist() ] + [sl0.tolist() + [1]]
+            # Pull back over affine transform using kernel
+            cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
+            npcex = np.asarray(cex)
+            print(type(jlt_mat[idx]), type(jlt_mat[idx][0][0]), type(npcex), jlt_mat[idx].dtype,
+                    npcex.dtype, type(cex), type(cex[0]))#DEBUG
+            print(cex) #DEBUG
+            sl0, _, _, _ = sp.lstsq(np.transpose(jlt_mat[idx]), npcex)
+            print("Linear pullback point dimension ", len(sl0)) #DEBUG
+            cex_basis = [ r + [0] for r in jlt_krn[idx].tolist() ] + [sl0.tolist() + [1]]
 
-    print('success')
+            # Pull back obtained basis in lower layers, return if something is found
+            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, jlt_mat, jlt_krn, pre_lin_ints,
+                                                post_lin_ints, idx, cex_basis)
+            if suc:
+                return True, cex
 
-    # Check if true cex
-    cex = cex_basis[0]
-    print(len(cex), len(weights[0]), inp_dim, len(cex_basis[0]))   #DEBUG
-    if suc and not encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) == \
-            encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
-        print('Found CEX')
-        return True, cex[:inp_dim]
-    print('CEX is spurious')
-    return False, [] 
+        # Nothing is found for any pullback across relu
+        return False, []
+    else:
+
+        print('Pullback reached layer 0')
+
+        # Check if any basis is a true cex
+        for cex in cex_basis:
+            if encode_dnn.eval_dnn(weights, biases, cex[:inp_dim]) != \
+                encode_dnn.eval_dnn(weights, biases, cex[inp_dim:]):
+                print('Found CEX')
+                return True, cex[:inp_dim]
+        print('CEX is spurious')
+        return False, [] 
 
 
 
@@ -398,7 +435,7 @@ if __name__ == '__main__':
     from utils.misc import *
     import random
 
-    n = 300
+    n = 500
     k = 3
     #id_basis = [ [0]*i + [1] + [0]*(n-i-1) for i in range(n) ]
     #vec = [ random.uniform(1, 100) for i in range(n) ]
@@ -414,6 +451,6 @@ if __name__ == '__main__':
     rand_left =     [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-2) ]
     rand_right =    [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-1) ]
     rand_one =      [ [ random.uniform(1, 100) for i in range(n) ] for j in range(k)]
-    pb = timeit(pull_back_relu, rand_one)
-    print("Pullback done")
+    pb = timeit(lambda x : [c for c in pull_back_relu(x)], rand_right)
+    print("Pullback done, returned %d cexes"%len(pb))
     
