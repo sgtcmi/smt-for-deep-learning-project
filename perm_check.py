@@ -63,46 +63,6 @@ def incl_check(vec, space):
     return True
 
 
-#def pull_back_relu(left_space, right_space):
-#    """
-#    Pull back `right_space` across relu to get a vecor in `left_space` that goes into
-#    `right_space` through the relu. Both affine spaces are given by a list of basis vecors of a
-#    linear space in a higher dimensional space, whose section where the last coordinate is 1 gives a
-#    vector in the affine subspace. Returns True, vec if found, False, [] otherwise. If returned, the
-#    last coordinate of the returned vec will be 1.
-#    """
-#    assert(len(left_space[0]) == len(right_space[0]))
-#
-#    tim = misc.TimePoint("pull_back_relu")
-#
-#
-#    solver = z3.SolverFor("LRA")
-#    z3_rc = [ z3.Real('rc_%d'%i) for i in range(len(right_space)) ]     # vector in right_space
-#    z3_lc = [ z3.Real('lc_%d'%i) for i in range(len(left_space)) ]     # vector in right_space
-#
-#    # constraints
-#    for i in range(len(left_space[0])):
-#        solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(z3_rc, right_space) ]) == 
-#                    relu_expr(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ])))
-#    solver.add(z3_lc[-1] == 1)
-#
-#    tim.time_point("Added constraints")
-#
-#    #TODO: Above takes a lot of time...?
-#
-#    print('Calling solver to pull back across relu with %d bases on the left, %d on right and %d \
-#            relus'%(len(left_space), len(right_space), len(left_space[0]))) #DEBUG
-#    if solver.check() == z3.unsat:
-#        tim.time_point("z3 call done")
-#        return False, []
-#    else:
-#        tim.time_point("z3 call done")
-#        mdl = solver.model()
-#        rvals = [ mdl.eval(z3.Sum([ lc*lb[i] for lc, lb in zip(z3_lc, left_space) ]))
-#                            for i in range(len(left_space[0])) ]
-#        tim.time_point("Model probed")
-#        return True, [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
-
 def pull_back_relu(right_space):
     """
     Given a space to the right of a relu, generates points to the left that go to inside that space
@@ -146,7 +106,69 @@ def pull_back_relu(right_space):
     return
 
 
+class ReluPullbackIterator:
+    """
+    Iterates over all pullbacks of a space across a relu.
+    """
+    def __init__(self, right_space, is_affine):
+        """
+        Construct to pull back the `right_space`. Bool `is_affine` states if the given space represents
+        an affine space, in which case the returned points will always have the last coordinate 1.
+        """
+        # Numbers
+        self.r_space = right_space[:]
+        self.d = len(right_space)
+        self.n = len(right_space[0])
+        self.r = min(self.d, pb_nbasis)
+        self.k = factorial(self.n) // (factorial(self.r) * factorial(self.n-self.r))
+
+        # Set up solver
+        self.solver = z3.SolverFor("LRA")
+        self.z3_rc = [ z3.Real('rc_%d'%i) for i in range(self.d) ]        # vector in right_space
+        self.z3_lv = [ z3.Real('lc_%d'%i) for i in range(self.n) ]        # vector in left_space
+        if is_affine:
+            self.solver.add(self.z3_lv[-1] == 1)
+
+        # Set up combination iterator
+        self.subb_cmb = itr.combinations(zip(self.z3_rc, self.r_space), self.r)
+        self.sbn = 0
+
+        # Number of queries we have done. By this, we signal that we have not done any queries yet
+        self.qn = pb_nqueries
+        
+
     
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        
+        while True:         
+            # Repeat iteration until something is returned, or StopIteration is raised
+            if self.qn >= pb_nqueries:
+                # To next basis combination
+                self.solver.reset()
+                self.sbn += 1
+                subb = next(self.subb_cmb) # This should raise StopIteration
+                for i in range(self.n):
+                    self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb ]) == relu_expr(self.z3_lv[i]))
+                self.qn = 0
+            
+            print("Calling solver with %d nodes and %d bases for combination %d of %d, query %d of %d"%( 
+                    self.n, self.r, self.sbn, self.k, self.qn, pb_nqueries))
+            # Continue doing queries
+            if self.solver.check() == z3.sat:
+                mdl = self.solver.model()
+                rvals = [ mdl.eval(v) for v in self.z3_lv ]
+                cex = [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
+                self.solver.add( z3.Not( z3.And([ lv == c for lv, c in zip(self.z3_lv, cex) ])))
+                self.qn += 1
+                return cex
+            else:
+                self.qn = pb_nqueries  # Signal that we need to go to the next iteration
+
+        
+
 
 
 # New push forward
@@ -237,10 +259,6 @@ def pull_back_cex_explore(weights, biases, inp_dim,
     """
 
     print('Attempting pullback at layer %d'%curr_lyr)   #DEBUG
-    print(list(map(lambda x: len(x[0]), pre_lin_ints))) #DEBUG
-    print(list(map(lambda x: len(x[0]), post_lin_ints))) #DEBUG
-    print(list(map(len, biases))) #DEBUG
-    print(len(cex_basis[0]))
     
     suc = True
     if curr_lyr > 0:
@@ -249,18 +267,13 @@ def pull_back_cex_explore(weights, biases, inp_dim,
         pstl = post_lin_ints[idx]
         b = biases[idx]
         
-        print(len(pstl[0]), len(cex_basis[0])) #DEBUG
         # iterate over pull backs across the relu in this layer
-        for cex in pull_back_relu(cex_basis):
+        for cex in ReluPullbackIterator(cex_basis, True):
         
             # Pull back over affine transform using kernel
             cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
             npcex = np.asarray(cex)
-            print(type(jlt_mat[idx]), type(jlt_mat[idx][0][0]), type(npcex), jlt_mat[idx].dtype,
-                    npcex.dtype, type(cex), type(cex[0]))#DEBUG
-            print(cex) #DEBUG
             sl0, _, _, _ = sp.lstsq(np.transpose(jlt_mat[idx]), npcex)
-            print("Linear pullback point dimension ", len(sl0)) #DEBUG
             cex_basis = [ r + [0] for r in jlt_krn[idx].tolist() ] + [sl0.tolist() + [1]]
 
             # Pull back obtained basis in lower layers, return if something is found
@@ -370,7 +383,7 @@ def perm_check(weights, biases, perm):
     lyr_vars =  [[ z3.Real('lyr_%d_%d'%(num_lyrs, nn)) for nn in range(out_dim) ]]
     lyr_vars_p = [[ z3.Real('lyr_p_%d_%d'%(num_lyrs, nn)) for nn in range(out_dim) ]]
     for v, v_ in zip(lyr_vars[-1], lyr_vars_p[-1]):
-        refined_solver.add(v == v_)
+        refined_solver.add(z3.Not(v == v_))
 
     # Refinement Loop
     for itp, w, b, i in zip(reversed(pre_lin_ints), reversed(weights), reversed(biases),
@@ -383,19 +396,21 @@ def perm_check(weights, biases, perm):
         lyr_out = encode_dnn.encode_network([w], [b], lyr_vars[-1])
         lyr_out_p = encode_dnn.encode_network([w], [b], lyr_vars_p[-1])
         for le, lep, lv, lvp in zip(lyr_out, lyr_out_p, lyr_vars[-2], lyr_vars_p[-2]):
-            refined_solver.add(z3.Not(le == lv))
-            refined_solver.add(z3.Not(lep == lvp))
+            refined_solver.add(le == lv)
+            refined_solver.add(lep == lvp)
 
         # Perform refined check
         refined_solver.push()
         
-        itp_vars = [ z3.Real('cf_%d'%i) for i in range(len(itp)) ]
-        for i in range(len(w)):
-            refined_solver.add( lyr_vars[-1][i] == z3.Sum([ iv * it[i] for iv, it in 
-                                                            zip(itp_vars,itp) ]))
-            refined_solver.add( lyr_vars_p[-1][i] == z3.Sum([ iv * it[len(w) + i] for iv, it in 
-                                                            zip(itp_vars,itp) ]))
-        refined_solver.add( 1 == z3.Sum([ iv * it[-1] for it in zip(itp_vars, itp) ]))
+        # Cefficient to each basis in interpolant
+        itp_cffs = [ z3.Real('cf_%d'%i) for i in range(len(itp)) ]
+        # Encode that input is in inetrpolant, 
+        for j in range(len(w)):
+            refined_solver.add( lyr_vars[-1][j] == z3.Sum([ ic * it[j] for ic, it in 
+                                                                    zip(itp_cffs, itp) ]))
+            refined_solver.add( lyr_vars_p[-1][j] == z3.Sum([ ic * it[len(w) + j] for ic, it in 
+                                                                    zip(itp_cffs, itp) ]))
+        refined_solver.add( 1 == z3.Sum([ ic * it[-1] for ic, it in zip(itp_cffs, itp) ]))
 
         if refined_solver.check() == z3.unsat:
             print("Verified via refinement at layer %d")
@@ -451,6 +466,6 @@ if __name__ == '__main__':
     rand_left =     [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-2) ]
     rand_right =    [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-1) ]
     rand_one =      [ [ random.uniform(1, 100) for i in range(n) ] for j in range(k)]
-    pb = timeit(lambda x : [c for c in pull_back_relu(x)], rand_right)
+    pb = timeit(lambda x : [c for c in ReluPullbackIterator(x, True)], rand_right)
     print("Pullback done, returned %d cexes"%len(pb))
     
