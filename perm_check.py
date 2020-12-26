@@ -277,9 +277,16 @@ def perm_check(weights, biases, perm):
         print('Kernel check for layer ', curr_lyr+1)
         l = len(w[0])
 
-        # Check linear inclusion by finding subbasis of input basis that does not go to 0. Represent
-        # affine transform as a linear transform over a higher dimensional space
-        out_basis = np.matrix(in_basis) * lm
+        # Find image of in_basis under space. Ensure generated out_basis is linearly independent
+        out_basis = []
+        for b in in_basis:
+            ob = (np.array(b) * lm).tolist()[0]
+            _r = np.linalg.matrix_rank(np.asarray(out_basis + [ob]))
+            if _r > len(out_basis):
+                out_basis.append(ob)
+        out_basis = np.matrix(out_basis)
+
+        # Check linear inclusion by finding subbasis of input basis that does not go to 0
         eq_basis  = out_basis           * np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
                                                     [[0]*i + [-1] + [0]*(l-i-1) for i in range(l)] +
                                                     [[0]*l])
