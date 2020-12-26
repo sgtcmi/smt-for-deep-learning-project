@@ -26,12 +26,6 @@ pb_nbasis = 2
 pb_nqueries = 1
 
 
-#def relu_vecs(vec):
-#    """
-#    Convert list of z3 expressions to a list representing the relu of those expressions.
-#    """
-#    return list(map(lambda z: z3.If(z >= 0, z, 0), vec))
-
 relu_expr = lambda z: z3.If(z >= 0, z, 0)
 
 def unit_vec(vec):
@@ -48,62 +42,72 @@ def dot_prod(v1, v2):
     return fsum(( v1e*v2e for v1e, v2e in zip(v1, v2)))
 
 
-def incl_check(vec, space):
-    """ 
-    Check if the given vector `vec` as a list of floats is in the space spanned by the vectors in
-    `space`,which should be a list of unit vectors of the same dimensionality as `vec`
+
+
+# New push forward
+def push_forward_relu(left_space):
     """
-    v = vec[:]
-    for u in space:
-        d = dot_prod(u, v)
-        v = [ ve - ue*d for ve, ue in zip(v, u) ]
-    for ve in v:
-        if ve != 0:
-            return False
-    return True
-
-
-def pull_back_relu(right_space):
+    Finds an linear subspace to the right of relu so that any vector in `left_space` left space
+    goes to it. Returns a basis of the space as a list of vecors. `left_space` must be a list of
+    linearly indpenedent vectors giving a basis of the left space.
     """
-    Given a space to the right of a relu, generates points to the left that go to inside that space
-    under the relu
-    """
-    d = len(right_space)
-    n = len(right_space[0])
-
-    # Set up solver
-    solver = z3.SolverFor("LRA")
-    z3_rc = [ z3.Real('rc_%d'%i) for i in range(d) ]        # vector in right_space
-    z3_lv = [ z3.Real('lc_%d'%i) for i in range(n) ]        # vector in left_space
-    solver.add(z3_lv[-1] == 1)
-
-    r = min(d, pb_nbasis)
-    k = factorial(n) // (factorial(r) * factorial(n-r))
-    for subb, sbn in zip(itr.combinations(zip(z3_rc, right_space), r), range(k)):
-        solver.push()
-        
-        # Add constraints
-        for i in range(n):
-            solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb ]) == relu_expr(z3_lv[i]))
-
-        # Call solver for pb_nqueries number of cexes
-        for i in range(pb_nqueries):
-            print("Calling solver with %d nodes and %d bases for combination %d of %d, query %d of %d"%(n, 
-                r, sbn, k, i, pb_nqueries), end ='\r')
-
-            if solver.check() == z3.sat:
-                mdl = solver.model()
-                rvals = [ mdl.eval(v) for v in z3_lv ]
-                cex = [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
-                solver.add( z3.Not( z3.And([ lv == c for lv, c in zip(z3_lv, cex) ])))
-                yield cex
-            else:
-                break
-        
-        solver.pop()
     
+    d = len(left_space)
+    n = len(left_space[0])
+    
+    # Set up z3.
+    solver = z3.SolverFor("LRA")
+    z3_coeffs = [ z3.Real("c_%d"%i) for i in range(d) ]
+
+    # Calculate the tie-classes of the relus
+    tie_class_reps = [0]
+    tie_class_vals = list(range(n))
+    for i in range(1, n):
+        print("Classifying ", i, end='\r', flush=True)    # DEBUG
+        solver.push()
+        solver.add( 0 >= z3.Sum([ c*l[i] for c, l in zip(z3_coeffs, left_space) ]) )
+        cls = -1
+        for rep in tie_class_reps:
+            solver.push()
+            solver.add( 0 < z3.Sum([ c*l[rep] for c, l in zip(z3_coeffs, left_space) ]) )
+            if solver.check() == z3.unsat:
+                cls = rep
+                solver.pop()
+                break
+            solver.pop()
+        if cls == -1:
+            tie_class_reps.append(i)
+        else:
+            tie_class_vals[i] = cls
+        solver.pop()
     print()
-    return
+
+
+    fb_basis = []
+
+    # If there are completely positive points in the left space, then those points exist in the
+    # right space
+    solver.reset()
+    solver.push()
+    for i in range(n):
+        solver.add( 0 <= z3.Sum([ c*l[i] for c, l in zip(z3_coeffs, left_space) ]) )
+    print("Checking completely positive points") #DEBUG
+    if solver.check() == z3.sat:
+        print("Completely positive points exist") #DEBUG
+        fb_basis = left_space[:]
+    solver.pop()
+
+    # Now, for each tie-class, we add basis generating that tie class
+    for rep, i in zip(tie_class_reps, range(len(tie_class_reps))):
+        for b, j in zip(left_space, range(len(left_space))):
+            print("Adding basis %d for tie-class %d"%(j, i), end='\r', flush=True)    #DEBUG
+            b_ = [ c if rv == rep else 0 for c, rv in zip(b, tie_class_vals) ]
+            if np.linalg.matrix_rank(np.asarray(fb_basis + [b_])) > len(fb_basis):
+                fb_basis.append(b_)
+                print("\nAdding basis")
+    print()
+
+    return fb_basis
 
 
 class ReluPullbackIterator:
@@ -169,74 +173,7 @@ class ReluPullbackIterator:
 
         
 
-
-
-# New push forward
-def push_forward_relu(left_space):
-    """
-    Finds an linear subspace to the right of relu so that any vector in `left_space` left space
-    goes to it. Returns a basis of the space as a list of vecors. `left_space` must be a list of
-    linearly indpenedent vectors giving a basis of the left space.
-    """
-    
-    d = len(left_space)
-    n = len(left_space[0])
-    
-    # Set up z3.
-    solver = z3.SolverFor("LRA")
-    z3_coeffs = [ z3.Real("c_%d"%i) for i in range(d) ]
-
-    # Calculate the tie-classes of the relus
-    tie_class_reps = [0]
-    tie_class_vals = list(range(n))
-    for i in range(1, n):
-        print("Classifying ", i, end='\r', flush=True)    # DEBUG
-        solver.push()
-        solver.add( 0 >= z3.Sum([ c*l[i] for c, l in zip(z3_coeffs, left_space) ]) )
-        cls = -1
-        for rep in tie_class_reps:
-            solver.push()
-            solver.add( 0 < z3.Sum([ c*l[rep] for c, l in zip(z3_coeffs, left_space) ]) )
-            if solver.check() == z3.unsat:
-                cls = rep
-                solver.pop()
-                break
-            solver.pop()
-        if cls == -1:
-            tie_class_reps.append(i)
-        else:
-            tie_class_vals[i] = cls
-        solver.pop()
-    print()
-
-    print(tie_class_reps, tie_class_vals) # DEBUG
-
-    fb_basis = []
-
-    # If there are completely positive points in the left space, then those points exist in the
-    # right space
-    solver.reset()
-    solver.push()
-    for i in range(n):
-        solver.add( 0 <= z3.Sum([ c*l[i] for c, l in zip(z3_coeffs, left_space) ]) )
-    print("Checking completely positive points") #DEBUG
-    if solver.check() == z3.sat:
-        print("Completely positive points exist") #DEBUG
-        fb_basis = left_space[:]
-    solver.pop()
-
-    # Now, for each tie-class, we add basis generating that tie class
-    for rep, i in zip(tie_class_reps, range(len(tie_class_reps))):
-        for b, j in zip(left_space, range(len(left_space))):
-            print("Adding basis %d for tie-class %d"%(j, i), end='\r', flush=True)    #DEBUG
-            b_ = [ c if rv == rep else 0 for c, rv in zip(b, tie_class_vals) ]
-            if np.linalg.matrix_rank(np.asarray(fb_basis + [b_])) > len(fb_basis):
-                fb_basis.append(b_)
-                print("\nAdding basis")
-    print()
-
-    return fb_basis
-            
+           
 
 def pull_back_cex_explore(weights, biases, inp_dim,
                             jlt_mat, jlt_krn, 
@@ -342,7 +279,6 @@ def perm_check(weights, biases, perm):
 
         # Check linear inclusion by finding subbasis of input basis that does not go to 0. Represent
         # affine transform as a linear transform over a higher dimensional space
-        # print(np.matrix(in_basis).shape, lm.shape) #DEBUG
         out_basis = np.matrix(in_basis) * lm
         eq_basis  = out_basis           * np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
                                                     [[0]*i + [-1] + [0]*(l-i-1) for i in range(l)] +
@@ -411,6 +347,8 @@ def perm_check(weights, biases, perm):
             refined_solver.add( lyr_vars_p[-1][j] == z3.Sum([ ic * it[len(w) + j] for ic, it in 
                                                                     zip(itp_cffs, itp) ]))
         refined_solver.add( 1 == z3.Sum([ ic * it[-1] for ic, it in zip(itp_cffs, itp) ]))
+
+        continue #DEBUG
 
         if refined_solver.check() == z3.unsat:
             print("Verified via refinement at layer %d")
