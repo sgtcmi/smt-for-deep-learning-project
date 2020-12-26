@@ -14,15 +14,16 @@ from utils import *
 """
 Some constants to tune some heuristics
 
-pb_nbasis       -   During pullback of a counterexample, there is a potentially very large space
-                   that needs to be searched. We reduce that by only taking pb-bsize many subsets
-                   of the basis set during pullback across relu, and finding counterexamples for
-                   each of these.
+pb_nbasis_r,    -   During pullback of a counterexample, there is a potentially very large space
+pb_nbasis_l         that needs to be searched. We reduce that by only taking pb-bsize many subsets
+                    of the basis set during pullback across relu, and finding counterexamples for
+                    each of these, for each of the left and right spaces.
 pb_nqueries     -   For each pullback across the relu, a sat query is made that can produce multiple
                     potential cexes. This parameter is the maximum number of cexes that we should
                     consider
 """
-pb_nbasis = 2
+pb_nbasis_r = 2 #2
+pb_nbasis_l = 2 #2
 pb_nqueries = 1
 
 
@@ -112,27 +113,33 @@ class ReluPullbackIterator:
     """
     Iterates over all pullbacks of a space across a relu.
     """
-    def __init__(self, right_space, is_affine):
+    def __init__(self, left_space, right_space, is_affine):
         """
         Construct to pull back the `right_space`. Bool `is_affine` states if the given space represents
         an affine space, in which case the returned points will always have the last coordinate 1.
         """
-        # Numbers
+        assert(len(left_space[0]) == len(right_space[0]))
+
+        # Fields
+        self.affine = is_affine
         self.r_space = right_space[:]
-        self.d = len(right_space)
+        self.l_space = left_space[:]
+        self.rd = len(right_space)
+        self.ld = len(left_space)
         self.n = len(right_space[0])
-        self.r = min(self.d, pb_nbasis)
-        self.k = factorial(self.d) // (factorial(self.r) * factorial(self.d-self.r))
+        self.rr = min(self.rd, pb_nbasis_r)
+        self.lr = min(self.ld, pb_nbasis_l)
+        self.k = (factorial(self.rd) // (factorial(self.rr) * factorial(self.rd-self.rr))) * \
+                 (factorial(self.ld) // (factorial(self.lr) * factorial(self.ld-self.lr)))
 
         # Set up solver
         self.solver = z3.SolverFor("LRA")
-        self.z3_rc = [ z3.Real('rc_%d'%i) for i in range(self.d) ]        # vector in right_space
-        self.z3_lv = [ z3.Real('lc_%d'%i) for i in range(self.n) ]        # vector in left_space
-        if is_affine:
-            self.solver.add(self.z3_lv[-1] == 1)
+        self.z3_rc = [ z3.Real('rc_%d'%i) for i in range(self.rd) ]        # Coefficients in right_space
+        self.z3_lc = [ z3.Real('lc_%d'%i) for i in range(self.ld) ]        # Coefficients in left
 
         # Set up combination iterator
-        self.subb_cmb = itr.combinations(zip(self.z3_rc, self.r_space), self.r)
+        self.subb_cmb = itr.product(itr.combinations(zip(self.z3_lc, self.l_space), self.lr),
+                                    itr.combinations(zip(self.z3_rc, self.r_space), self.rr))
         self.sbn = 0
 
         # Number of queries we have done. By this, we signal that we have not done any queries yet
@@ -152,15 +159,17 @@ class ReluPullbackIterator:
                 print("Resetting, too many queries")
                 self.solver.reset()
                 self.sbn += 1
-                subb = next(self.subb_cmb)
-                #try:
+                subb_l, subb_r = next(self.subb_cmb)
                 
+                if self.affine:
+                    self.solver.add(z3.Sum([ lc*lb[-1] for lc, lb in subb_l ]) == 1)
                 for i in range(self.n):
-                    self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb ]) == relu_expr(self.z3_lv[i]))
+                    self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb_r ]) == 
+                                    relu_expr(z3.Sum([ lc*lb[i] for lc, lb in subb_l ])))
                 self.qn = 0
             
             print("Calling solver with %d nodes and %d bases for combination %d of %d, query %d of %d"%( 
-                    self.n, self.r, self.sbn, self.k, self.qn, pb_nqueries))
+                    self.n, self.rr, self.sbn, self.k, self.qn, pb_nqueries))
             # Continue doing queries
             if self.solver.check() == z3.sat:
                 mdl = self.solver.model()
@@ -210,7 +219,7 @@ def pull_back_cex_explore(weights, biases, inp_dim,
         b = biases[idx]
         
         # iterate over pull backs across the relu in this layer
-        for cex in ReluPullbackIterator(cex_basis, True):
+        for cex in ReluPullbackIterator(pstl, cex_basis, True):
         
             # Pull back over affine transform using kernel
             cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
@@ -249,7 +258,7 @@ def pull_back_cex_explore(weights, biases, inp_dim,
             # Set up solver and constraints
             solver = z3.SolverFor("LRA")
             cex_cffs = [ z3.Real("cxcf_%d"%i) for i in range(len(cex_basis)) ]
-            #solver.add( z3.Sum([ cf*b[-1] for cf, b in zip(cex_cffs, cex_basis) ]) == 1 )
+            solver.add( z3.Sum([ cf*b[-1] for cf, b in zip(cex_cffs, cex_basis) ]) == 1 )
             cex_cmps = [ z3.Sum([ cf*b[i] for cf, b in zip(cex_cffs, cex_basis) ]) 
                                             for i in range(inp_dim) ]
             for eq in prc_eq:
