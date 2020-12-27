@@ -46,6 +46,7 @@ if __name__ == "__main__":
     sys.path.insert(1, "../..")
 from direct_check import *
 from perm_check import *
+import matplotlib.pyplot as plt
 
 # We get the weights and biases of the network
 weights = [l.get_weights()[0].tolist() for l in mdl.layers]
@@ -70,4 +71,6 @@ res, mdl = perm_check(weights, biases, perm, lin_conds)
 if res:
     print('Verified')
 else:
-    print('Not verified, model: ', mdl)
+    print('Not verified') #, model: ', mdl)
+    plt.plot([ i/inp_size for i in range(inp_size) ], mdl)
+    plt.show()

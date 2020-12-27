@@ -31,6 +31,7 @@ pb_nqueries = 1
 pb_nrandq = 100
 pb_rand_lb = 0
 pb_rand_ub = 1
+fp_abs_tol = 1e-12
 
 
 relu_expr = lambda z: z3.If(z >= 0, z, 0)
@@ -42,9 +43,12 @@ def check_cex(weights, biases, perm, prc_eq, cex):
     """
     assert len(weights[0]) == len(perm) and len(cex) == len(perm)
     for eq in prc_eq:
-        if not isclose(sum([ c*v for c, v in zip(cex, eq[:-1]) ]), eq[-1]):
-            print("CEX does not respect linear preconditions") #DEBUG
+        if not isclose(sum([ c*v for c, v in zip(cex, eq[:-1]) ]), eq[-1], abs_tol=fp_abs_tol):
+            print("CEX does not respect linear preconditions", 
+                    sum([ c*v for c, v in zip(cex, eq[:-1]) ]) - eq[-1]) #DEBUG
             return False
+    print(encode_dnn.eval_dnn(weights, biases, cex)[0] - \
+                encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])[0]) # DEBUG
     return encode_dnn.eval_dnn(weights, biases, cex) != \
                 encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])
 
