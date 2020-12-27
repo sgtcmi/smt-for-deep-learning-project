@@ -243,12 +243,14 @@ def pull_back_cex_explore(weights, biases, inp_dim,
             # DEBUG
             cx_mat = np.transpose(np.matrix([ r[:inp_dim] + [r[-1]] for r in cex_basis ]))
             eq_mat = np.matrix([ r[:-1] + [-r[-1]] for r in prc_eq ])
-            n_cex_b = np.transpose(cx_mat * sp.null_space(eq_mat * cx_mat)).tolist()
+            n_cex_b = np.transpose(cx_mat @ sp.null_space(eq_mat @ cx_mat)).tolist()
             allz = True
             for r, bi in zip(n_cex_b, range(len(n_cex_b))):
                 if r[-1] != 0:
                     allz = False
-                    assert(False)
+                    print("Nonzero last elt found at %d"%bi)
+                    print(n_cex_b)
+                    #assert(False) #DEBUG
                     break
             if allz:
                 print("All last components are 0!")
@@ -360,7 +362,7 @@ def perm_check(weights, biases, perm, prc_eq):
                 out_basis.append(ob)
 
         # Check linear inclusion by finding subbasis of input basis that does not go to 0
-        eq_basis = np.matrix(in_basis) @ jat_mat
+        eq_basis = np.matrix(in_basis) @ lm \
                                         @ np.matrix([[0]*i + [+1] + [0]*(l-i-1) for i in range(l)] + 
                                                     [[0]*i + [-1] + [0]*(l-i-1) for i in range(l)] +
                                                     [[0]*l])
@@ -375,8 +377,8 @@ def perm_check(weights, biases, perm, prc_eq):
             # interested in the "reverse kernel", or the perpendicular space to the kernel. This is
             # a space of coefficients to the basis, and we apply them to the basis to get required
             # space.
-            cex_basis = (np.transpose(np.null_space(                             # Image of perp space of
-                        np.transpose(sp.null_space(np.transpose(eq_basis))))) \ 
+            cex_basis = (np.transpose(sp.null_space(                             # Image of perp space of
+                        np.transpose(sp.null_space(np.transpose(eq_basis))))) \
                         @ np.matrix(in_basis)).tolist()
 
             
@@ -393,7 +395,6 @@ def perm_check(weights, biases, perm, prc_eq):
         # Save these interpolants, and get next ones
         print('Looking for affine interpolant for next layer')
         pre_lin_ints.append(in_basis)
-        out_basis = out_basis.tolist()
         post_lin_ints.append(out_basis)
         in_basis = push_forward_relu(out_basis)     #TODO Confirm that out_basis is linearly ndependent
 
