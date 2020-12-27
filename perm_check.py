@@ -24,6 +24,7 @@ pb_nqueries     -   For each pullback across the relu, a sat query is made that 
 """
 pb_nbasis_r = 2 #2
 pb_nbasis_l = 2 #2
+pb_ntclass = 1
 pb_nqueries = 1
 
 
@@ -41,6 +42,37 @@ def check_cex(weights, biases, perm, prc_eq, cex):
     return encode_dnn.eval_dnn(weights, biases, cex) != \
                 encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])
 
+
+def space_intersect(asp, bsp):
+    """
+    Given two spaces as the span of two basis sets, find the intersection space as the span of the
+    basis sets. A intersection B is vA so that vA in ImB <=> vAkerB = 0. So, A intersection B
+    is ker(AkerB)A.
+
+    """
+    assert(len(asp[0]) == len(bsp[0]))
+    a = np.matrix(asp)
+    b = np.matrix(bsp)
+    kb = sp.null_space(b)
+    if len(kb) <= 0:
+        return asp
+    else:
+        print(kb.shape, a.shape, b.shape) #DEBUG
+        kk = np.transpose(sp.null_space(np.transpose(a @ kb)))
+        if len(kk) <= 0:
+            return []
+        else:
+            return (kk @ a).tolist()
+
+def extend_basis(b, vs):
+    """
+    Extends basis with list of vectors vs, checks linear dependence
+    """
+    b = b[:]
+    for v in vs:
+        if np.linalg.matrix_rank(np.asarray(b + [v])) > len(b):
+            b.append(v)
+    return b
 
 
 # New push forward
@@ -88,12 +120,14 @@ def push_forward_relu(left_space):
     # right space
     solver.reset()
     solver.push()
+    h_cp = False
     for i in range(n):
         solver.add( 0 <= z3.Sum([ c*l[i] for c, l in zip(z3_coeffs, left_space) ]) )
     print("Checking completely positive points") #DEBUG
     if solver.check() == z3.sat:
         print("Completely positive points exist") #DEBUG
         fb_basis = left_space[:]
+        h_cp = True 
     solver.pop()
 
     # Now, for each tie-class, we add basis generating that tie class
@@ -106,14 +140,87 @@ def push_forward_relu(left_space):
                 print("\nAdding basis")
     print()
 
-    return fb_basis
+    return fb_basis, tie_class_reps, tie_class_vals, h_cp
 
 
+#class ReluPullbackIterator:
+#    """
+#    Iterates over all pullbacks of a space across a relu.
+#    """
+#    def __init__(self, left_space, right_space, is_affine):
+#        """
+#        Construct to pull back the `right_space`. Bool `is_affine` states if the given space represents
+#        an affine space, in which case the returned points will always have the last coordinate 1.
+#        """
+#        assert(len(left_space[0]) == len(right_space[0]))
+#
+#        # Fields
+#        self.affine = is_affine
+#        self.r_space = right_space[:]
+#        self.l_space = left_space[:]
+#        self.rd = len(right_space)
+#        self.ld = len(left_space)
+#        self.n = len(right_space[0])
+#        self.rr = min(self.rd, pb_nbasis_r)
+#        self.lr = min(self.ld, pb_nbasis_l)
+#        self.k = (factorial(self.rd) // (factorial(self.rr) * factorial(self.rd-self.rr))) * \
+#                 (factorial(self.ld) // (factorial(self.lr) * factorial(self.ld-self.lr)))
+#
+#        # Set up solver
+#        self.solver = z3.SolverFor("LRA")
+#        self.z3_rc = [ z3.Real('rc_%d'%i) for i in range(self.rd) ]        # Coefficients in right_space
+#        self.z3_lc = [ z3.Real('lc_%d'%i) for i in range(self.ld) ]        # Coefficients in left
+#
+#        # Set up combination iterator
+#        self.subb_cmb = itr.product(itr.combinations(zip(self.z3_lc, self.l_space), self.lr),
+#                                    itr.combinations(zip(self.z3_rc, self.r_space), self.rr))
+#        self.sbn = 0
+#
+#        # Number of queries we have done. By this, we signal that we have not done any queries yet
+#        self.qn = pb_nqueries
+#        
+#
+#    
+#    def __iter__(self):
+#        return self
+#
+#    def __next__(self):
+#        
+#        while True:         
+#            # Repeat iteration until something is returned, or StopIteration is raised
+#            if self.qn >= pb_nqueries:
+#                # To next basis combination
+#                print("Resetting, too many queries")
+#                self.solver.reset()
+#                self.sbn += 1
+#                subb_l, subb_r = next(self.subb_cmb)
+#                
+#                if self.affine:
+#                    self.solver.add(z3.Sum([ lc*lb[-1] for lc, lb in subb_l ]) == 1)
+#                for i in range(self.n):
+#                    self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb_r ]) == 
+#                                    relu_expr(z3.Sum([ lc*lb[i] for lc, lb in subb_l ])))
+#                self.qn = 0
+#            
+#            print("Calling solver with %d nodes and %d bases for combination %d of %d, query %d of %d"%( 
+#                    self.n, self.rr, self.sbn, self.k, self.qn, pb_nqueries))
+#            # Continue doing queries
+#            if self.solver.check() == z3.sat:
+#                mdl = self.solver.model()
+#                rvals = [ mdl.eval(v) for v in self.z3_lv ]
+#                cex = [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
+#                self.solver.add( z3.Not( z3.And([ lv == c for lv, c in zip(self.z3_lv, cex) ])))
+#                self.qn += 1
+#                return cex
+#            else:
+#                self.qn = pb_nqueries  # Signal that we need to go to the next iteration
+#
+        
 class ReluPullbackIterator:
     """
     Iterates over all pullbacks of a space across a relu.
     """
-    def __init__(self, left_space, right_space, is_affine):
+    def __init__(self, left_space, right_space, tie_class_reprs, tie_class_vals, has_cp, is_affine):
         """
         Construct to pull back the `right_space`. Bool `is_affine` states if the given space represents
         an affine space, in which case the returned points will always have the last coordinate 1.
@@ -122,28 +229,39 @@ class ReluPullbackIterator:
 
         # Fields
         self.affine = is_affine
+        self.h_cp = has_cp
         self.r_space = right_space[:]
         self.l_space = left_space[:]
+        self.tc_vals = tie_class_vals[:]
         self.rd = len(right_space)
         self.ld = len(left_space)
         self.n = len(right_space[0])
-        self.rr = min(self.rd, pb_nbasis_r)
-        self.lr = min(self.ld, pb_nbasis_l)
-        self.k = (factorial(self.rd) // (factorial(self.rr) * factorial(self.rd-self.rr))) * \
-                 (factorial(self.ld) // (factorial(self.lr) * factorial(self.ld-self.lr)))
+        self.r = min(self.rd, pb_ntclass)
+        self.k = (factorial(self.rd) // (factorial(self.r) * factorial(self.rd-self.r))) 
 
         # Set up solver
         self.solver = z3.SolverFor("LRA")
         self.z3_rc = [ z3.Real('rc_%d'%i) for i in range(self.rd) ]        # Coefficients in right_space
         self.z3_lc = [ z3.Real('lc_%d'%i) for i in range(self.ld) ]        # Coefficients in left
+        self.z3_lv = [ z3.Real('lv_%d'%i) for i in range(self.n) ]
+        #for i in range(self.n):
+        #    self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(self.z3_rc, self.r_space) ]) ==
+        #                     relu_expr(z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space)
+        #                         ])))
 
-        # Set up combination iterator
-        self.subb_cmb = itr.product(itr.combinations(zip(self.z3_lc, self.l_space), self.lr),
-                                    itr.combinations(zip(self.z3_rc, self.r_space), self.rr))
-        self.sbn = 0
+        # Has whole space check been done yet
 
+        # Have we checked positive side of this combination
+        self.pside = False
+
+        self.cmb = itr.combinations(tie_class_reprs, self.r)
+        self.ncmb = 0
+
+        
         # Number of queries we have done. By this, we signal that we have not done any queries yet
         self.qn = pb_nqueries
+
+        #self.solver.push()
         
 
     
@@ -154,41 +272,129 @@ class ReluPullbackIterator:
         
         while True:         
             # Repeat iteration until something is returned, or StopIteration is raised
+            #if self.qn >= pb_nqueries:
+            #    self.solver.pop()
+            #    self.solver.push()
+            #    self.qn = 0
+            #    if not self.wcheck:
+            #        # Check if all relus active gives us a pullback space
+            #        self.wcheck = True
+            #        for i in range(self.n):
+            #            self.solver.add( z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ])
+            #                            > 0)
+            #            self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(self.z3_rc, self.r_space) ]) ==
+            #                    z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ]) )
+
+            #    elif not self.pside:
+            #        # Check if tie-class combination leads to pullback if set to >0
+            #        self.pside = True
+            #        self.ncmb += 1
+            #        self.tcmb = next(self.cmb)
+            #        for i in range(self.n):
+            #            if self.tc_vals[i] in self.tcmb:
+            #                self.solver.add( z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ])
+            #                            > 0)
+            #                self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(self.z3_rc, self.r_space) ]) ==
+            #                                z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ]) )
+
+            #            else:
+            #                self.solver.add( z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ])
+            #                            <= 0)
+            #                self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(self.z3_rc, self.r_space) ]) ==
+            #                                 0 )
+
+            #    else:
+            #        # Check if tie-class combination leads to pullback if set to <= 0
+            #        self.pside = False
+            #        for i in range(self.n):
+            #            if not self.tc_vals[i] in self.tcmb:
+            #                self.solver.add( z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ])
+            #                            > 0)
+            #                self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(self.z3_rc, self.r_space) ]) ==
+            #                                z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ]) )
+
+            #            else:
+            #                self.solver.add( z3.Sum([ lc*lb[i] for lc, lb in zip(self.z3_lc, self.l_space) ])
+            #                            <= 0)
+            #                self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in zip(self.z3_rc, self.r_space) ]) ==
+            #                                 0 )
+
             if self.qn >= pb_nqueries:
-                # To next basis combination
-                print("Resetting, too many queries")
                 self.solver.reset()
-                self.sbn += 1
-                subb_l, subb_r = next(self.subb_cmb)
-                
-                if self.affine:
-                    self.solver.add(z3.Sum([ lc*lb[-1] for lc, lb in subb_l ]) == 1)
+                print("Resetting solver")   #DEBUG
+                if self.h_cp:
+                    self.h_cp = False
+                    print("Searching for all positive")  #DEBUG
+                    cb = space_intersect(self.l_space, self.r_space)
+                    if len(cb) <= 0:
+                        print("Intersection is null")
+                        continue
+                    for i in range(self.n):
+                        self.solver.add( self.z3_lv[i] > 0)
+                else:
+                    print("Searching for non-all-positive combos")
+                    bz = []
+                    bnz = []
+                    clss = next(self.cmb)
+                    self.ncmb += 1
+                    for i in range(self.n):
+                        if self.tc_vals[i] in clss:
+                            bz.append([0]*i + [1] + [0]*(self.n-i-1))
+                        else:
+                            bnz.append([0]*i + [1] + [0]*(self.n-i-1))
+                    b1 = space_intersect(bnz, self.r_space)
+                    if len(b1) <= 0:
+                        print("Intersection for combination is null")
+                        continue
+                    b2 = extend_basis(b1, bz)
+                    cb = space_intersect(self.l_space, b2)
+                    if len(cb) <= 0:
+                        print("Intersection for combination is null")
+                        continue
+                    for i in range(self.n):
+                        if self.tc_vals[i] in clss:
+                            self.solver.add( self.z3_lv[i] <= 0)
+                        else:
+                            self.solver.add( self.z3_lv[i] > 0)
+ 
+                    
+                z3_kc = [ z3.Real('kc_%d'%i) for i in range(len(cb)) ]
                 for i in range(self.n):
-                    self.solver.add( z3.Sum([ rc*rb[i] for rc, rb in subb_r ]) == 
-                                    relu_expr(z3.Sum([ lc*lb[i] for lc, lb in subb_l ])))
+                    self.solver.add( z3.Sum([ kc*cbr[i] for kc, cbr in zip(z3_kc, cb) ]) ==
+                                self.z3_lv[i])
+
                 self.qn = 0
-            
+
+
+
+
+
+
             print("Calling solver with %d nodes and %d bases for combination %d of %d, query %d of %d"%( 
-                    self.n, self.rr, self.sbn, self.k, self.qn, pb_nqueries))
+                    self.n, self.r, self.ncmb, self.k, self.qn, pb_nqueries))
             # Continue doing queries
             if self.solver.check() == z3.sat:
+                print("Found pullback")
                 mdl = self.solver.model()
                 rvals = [ mdl.eval(v) for v in self.z3_lv ]
+                print(rvals)
                 cex = [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
                 self.solver.add( z3.Not( z3.And([ lv == c for lv, c in zip(self.z3_lv, cex) ])))
                 self.qn += 1
                 return cex
             else:
+                print("Pullback failed")
+                print(self.solver) #DEBUG
+                #assert(False) #DEBUG
                 self.qn = pb_nqueries  # Signal that we need to go to the next iteration
 
-        
-
+ 
            
 
 def pull_back_cex_explore(weights, biases, inp_dim, 
                             perm, prc_eq,
                             jlt_mat, jlt_krn, 
-                            pre_lin_ints, post_lin_ints, 
+                            pre_lin_ints, post_lin_ints, tc_reps, tc_vals, has_cp,
                             curr_lyr, cex_basis):
     """
     Given a basis of potential counterexamples at any layer, pulls the cex back over the network
@@ -200,9 +406,8 @@ def pull_back_cex_explore(weights, biases, inp_dim,
     prc_eq              -   The precondition equations on the input
     jlt_mat, jlt_krn    -   Matrices giving the joint linear transform, and their kernels for each
                             layer
-    pre_lin_ints, 
-    post_lin_ints       -   The interpolants derived for each layer, given as an affine space feeding into
-                            the joint affine transform, and the corresponding affine space emerging
+    post_lin_ints,      -   The interpolants derived for each layer, given as an affine space feeding into
+    pre_lin_ints,           the joint affine transform, and the corresponding affine space emerging
                             from the joint affine transform
     curr_lyr            -   The layer at which the potential counterexample basis was produced
     cex_basis           -   The potential counterexample basis
@@ -219,7 +424,7 @@ def pull_back_cex_explore(weights, biases, inp_dim,
         b = biases[idx]
         
         # iterate over pull backs across the relu in this layer
-        for cex in ReluPullbackIterator(pstl, cex_basis, True):
+        for cex in ReluPullbackIterator(pstl, cex_basis, tc_reps[idx], tc_vals[idx], has_cp[idx], True):
         
             # Pull back over affine transform using kernel
             cex = [ i-j for i,j in zip(cex[:-1], (b+b)) ]
@@ -241,6 +446,14 @@ def pull_back_cex_explore(weights, biases, inp_dim,
         if len(prc_eq) > 0:
 
             # DEBUG
+            # Try and intersect cex_basis with prc_eq and pick random from there
+            cx_b_trunc = [ r[:inp_dim] + [r[-1]] for r in cex_basis ] 
+            pcex_b = space_intersect(cx_b_trunc, prc_eq)
+            print(len(pcex_b))
+            if len(pcex_b) > 0:
+                assert(False) #DEBUG
+
+            # DEBUG
             cx_mat = np.transpose(np.matrix([ r[:inp_dim] + [r[-1]] for r in cex_basis ]))
             eq_mat = np.matrix([ r[:-1] + [-r[-1]] for r in prc_eq ])
             n_cex_b = np.transpose(cx_mat @ sp.null_space(eq_mat @ cx_mat)).tolist()
@@ -249,7 +462,11 @@ def pull_back_cex_explore(weights, biases, inp_dim,
                 if r[-1] != 0:
                     allz = False
                     print("Nonzero last elt found at %d"%bi)
-                    print(n_cex_b)
+                    print(r)
+                    p_cex = [ r[i]/r[-1] for i in range(inp_dim) ]
+                    if check_cex(weights, biases, perm, prc_eq, p_cex):
+                        print("Found CEX")
+                        return True, p_cex
                     #assert(False) #DEBUG
                     break
             if allz:
@@ -347,6 +564,9 @@ def perm_check(weights, biases, perm, prc_eq):
     # Track interpolants
     pre_lin_ints = []           # Interpolants
     post_lin_ints = []          # Interpolants after going through linear transform
+    tc_reps = []
+    tc_vals = []
+    has_cp = []
 
     # Linear inclusion loop
     for w, b, lm, curr_lyr in zip(weights, biases, jat_mat, range(num_lyrs)):
@@ -386,7 +606,7 @@ def perm_check(weights, biases, perm, prc_eq):
             #cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if not np.allclose(eb, 0) ]
 
             suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn,
-                                            pre_lin_ints, post_lin_ints, curr_lyr, cex_basis)
+                                            pre_lin_ints, post_lin_ints, tc_reps, tc_vals, has_cp, curr_lyr, cex_basis)
 
             if suc:
                 return False, cex #DEBUG
@@ -396,7 +616,10 @@ def perm_check(weights, biases, perm, prc_eq):
         print('Looking for affine interpolant for next layer')
         pre_lin_ints.append(in_basis)
         post_lin_ints.append(out_basis)
-        in_basis = push_forward_relu(out_basis)     #TODO Confirm that out_basis is linearly ndependent
+        in_basis, tc_r, tc_v, h_cp = push_forward_relu(out_basis)     #TODO Confirm that out_basis is linearly ndependent
+        tc_reps.append(tc_r)
+        tc_vals.append(tc_v)
+        has_cp.append(h_cp)
 
 
     
@@ -456,7 +679,7 @@ def perm_check(weights, biases, perm, prc_eq):
                             + [1]
             
             suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn,
-                                            pre_lin_ints, post_lin_ints, i, cex_basis)
+                                            pre_lin_ints, post_lin_ints, tc_reps, tc_vals, has_cp, i, cex_basis)
             if suc:
                 return False, cex       #DEBUG
                 pass
