@@ -1,10 +1,18 @@
+"""
+Command line usage:
+    arg1    -   Number of samples per datapoint
+    arg2    -   Number of data points
+    arg3    -   Sparsity
+    arg4    -   Output filename
+"""
 
 from datasetgen import datasetgen
+import sys
 
-sp=int(input("number of sample points to be generated :"))
-dp=int(input("number of datapoints needed : "))
-s=int(input("sparsity : "))
-dataset_filename=input("desired filename :")
+sp=int(sys.argv[1])
+dp=int(sys.argv[2])
+s=int(sys.argv[3])
+dataset_filename=sys.argv[4]
 l=str(datasetgen(sp,dp,s))
 
 text_file = open(dataset_filename,"w")

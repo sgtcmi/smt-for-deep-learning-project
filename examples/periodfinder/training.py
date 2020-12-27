@@ -16,8 +16,8 @@ import tensorflow as tf
 from tensorflow import keras
 from sklearn.model_selection import train_test_split
 
-from keras.models import Sequential
-from keras.layers import Dense
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
 
 def dnn(dataset,input_dim,num_layer,epoch,batch_size,sparsity):
   data = open(dataset,'r').read()
