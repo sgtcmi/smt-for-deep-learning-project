@@ -49,8 +49,11 @@ def check_cex(weights, biases, perm, prc_eq, cex):
             return False
     print(encode_dnn.eval_dnn(weights, biases, cex)[0] - \
                 encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])[0]) # DEBUG
-    return isclose(encode_dnn.eval_dnn(weights, biases, cex),
-                encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ]), abs_tol=fp_abs_tol)
+    for x, y in zip(encode_dnn.eval_dnn(weights, biases, cex),
+            encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])):
+        if not isclose(x, y, abs_tol=fp_abs_tol):
+            return True
+    return False
 
 
 def space_intersect(asp, bsp):
