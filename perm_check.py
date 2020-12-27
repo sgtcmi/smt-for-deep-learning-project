@@ -47,8 +47,6 @@ def check_cex(weights, biases, perm, prc_eq, cex):
             print("CEX does not respect linear preconditions", 
                     sum([ c*v for c, v in zip(cex, eq[:-1]) ]) - eq[-1]) #DEBUG
             return False
-    print(encode_dnn.eval_dnn(weights, biases, cex)[0] - \
-                encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])[0]) # DEBUG
     for x, y in zip(encode_dnn.eval_dnn(weights, biases, cex),
             encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])):
         if not isclose(x, y, abs_tol=fp_abs_tol):
@@ -65,7 +63,6 @@ def space_intersect(asp, bsp):
 
     ssp = asp + [ [ -c for c in r ] for r in bsp ]
     k = np.transpose(sp.null_space(np.transpose(np.matrix(ssp))))
-    print(k.shape)
     if len(k) <= 0:
         return []
     return (np.matrix([ r[:len(asp)] for r in k ]) @ asp).tolist()
@@ -232,7 +229,6 @@ def pull_back_cex_explore(weights, biases, inp_dim,
     """
 
     print('Attempting pullback at layer %d'%curr_lyr)   #DEBUG
-    print(len(in_basis[0]))
     
     if curr_lyr > 0:
         idx = curr_lyr-1
@@ -259,7 +255,6 @@ def pull_back_cex_explore(weights, biases, inp_dim,
         print('Pullback reached layer 0')
 
         # Decompose input space
-        print(len(in_basis[0]), len(spr_basis[0]))
         b_space = space_intersect(in_basis, spr_basis)
         if len(b_space) <= 0:
             g_space = in_basis
@@ -693,32 +688,4 @@ def perm_check(weights, biases, perm, prc_eq):
 
 
 
-# DEBUG
-if __name__ == '__main__':
-
-    from utils.misc import *
-    import random
-
-    n = 500
-    k = 3
-    #id_basis = [ [0]*i + [1] + [0]*(n-i-1) for i in range(n) ]
-    #vec = [ random.uniform(1, 100) for i in range(n) ]
-    #rand_sp = [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n//2) ]
-    #sp1 = [[1, 0, 0], [0, 1, -1]]
-    #pf = timeit(push_forward_relu, rand_sp)
-    #for b in pf:
-    #    for i in range(min(len(b), 10)):
-    #        print("%6.3f, "%b[i], end='')
-    #    print("..." if len(b) > 10 else "", flush=True)
-    #print(push_forward_relu(sp1))
-
-    #rand_left =     [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-2) ]
-    #rand_right =    [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-1) ]
-    #rand_one =      [ [ random.uniform(1, 100) for i in range(n) ] for j in range(k)]
-    #pb = timeit(lambda x : [c for c in ReluPullbackIterator(x, True)], rand_right)
-    #print("Pullback done, returned %d cexes"%len(pb))
-
-    asp = [[1, 0, 0], [0, 1, 0]]
-    bsp = [[0, 0, 1]]
-    print(space_intersect(asp, bsp))
-    
+   
