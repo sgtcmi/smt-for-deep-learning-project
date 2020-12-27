@@ -1,7 +1,9 @@
 """
 Use the algo to check for permutations
 """
+from copy import deepcopy
 from math import *
+import random
 import time #PROFILE
 import itertools as itr
 
@@ -26,6 +28,9 @@ pb_nbasis_r = 2 #2
 pb_nbasis_l = 2 #2
 pb_ntclass = 1
 pb_nqueries = 1
+pb_nrandq = 100
+pb_rand_lb = 0
+pb_rand_ub = 1
 
 
 relu_expr = lambda z: z3.If(z >= 0, z, 0)
@@ -37,7 +42,8 @@ def check_cex(weights, biases, perm, prc_eq, cex):
     """
     assert len(weights[0]) == len(perm) and len(cex) == len(perm)
     for eq in prc_eq:
-        if sum([ c*v for c, v in zip(cex, eq[:-1]) ]) != eq[-1]:
+        if not isclose(sum([ c*v for c, v in zip(cex, eq[:-1]) ]), eq[-1]):
+            print("CEX does not respect linear preconditions") #DEBUG
             return False
     return encode_dnn.eval_dnn(weights, biases, cex) != \
                 encode_dnn.eval_dnn(weights, biases, [ cex[p] for p in perm ])
@@ -46,29 +52,23 @@ def check_cex(weights, biases, perm, prc_eq, cex):
 def space_intersect(asp, bsp):
     """
     Given two spaces as the span of two basis sets, find the intersection space as the span of the
-    basis sets. A intersection B is vA so that vA in ImB <=> vAkerB = 0. So, A intersection B
-    is ker(AkerB)A.
-
+    basis sets. 
     """
     assert(len(asp[0]) == len(bsp[0]))
-    a = np.matrix(asp)
-    b = np.matrix(bsp)
-    kb = sp.null_space(b)
-    if len(kb) <= 0:
-        return asp
-    else:
-        print(kb.shape, a.shape, b.shape) #DEBUG
-        kk = np.transpose(sp.null_space(np.transpose(a @ kb)))
-        if len(kk) <= 0:
-            return []
-        else:
-            return (kk @ a).tolist()
 
+    ssp = asp + [ [ -c for c in r ] for r in bsp ]
+    k = np.transpose(sp.null_space(np.transpose(np.matrix(ssp))))
+    print(k.shape)
+    if len(k) <= 0:
+        return []
+    return (np.matrix([ r[:len(asp)] for r in k ]) @ asp).tolist()
+
+    
 def extend_basis(b, vs):
     """
     Extends basis with list of vectors vs, checks linear dependence
     """
-    b = b[:]
+    b = deepcopy(b)
     for v in vs:
         if np.linalg.matrix_rank(np.asarray(b + [v])) > len(b):
             b.append(v)
@@ -126,7 +126,7 @@ def push_forward_relu(left_space):
     print("Checking completely positive points") #DEBUG
     if solver.check() == z3.sat:
         print("Completely positive points exist") #DEBUG
-        fb_basis = left_space[:]
+        fb_basis = deepcopy(left_space)
         h_cp = True 
     solver.pop()
 
@@ -230,9 +230,9 @@ class ReluPullbackIterator:
         # Fields
         self.affine = is_affine
         self.h_cp = has_cp
-        self.r_space = right_space[:]
-        self.l_space = left_space[:]
-        self.tc_vals = tie_class_vals[:]
+        self.r_space = deepcopy(right_space)
+        self.l_space = deepcopy(left_space)
+        self.tc_vals = deepcopy(tie_class_vals)
         self.rd = len(right_space)
         self.ld = len(left_space)
         self.n = len(right_space[0])
@@ -366,29 +366,76 @@ class ReluPullbackIterator:
                 self.qn = 0
 
 
+class ReluPullbackIterator2:
+    """
+    Iterates over all pullbacks of a space across a relu.
+    """
+    def __init__(self, left_space, right_space, tie_class_reprs, tie_class_vals, has_cp, is_affine):
+        """
+        Construct to pull back the `right_space`. Bool `is_affine` states if the given space represents
+        an affine space, in which case the returned points will always have the last coordinate 1.
+        """
+        assert(len(left_space[0]) == len(right_space[0]))
 
+        # Fields
+        self.affine = is_affine
+        self.h_cp = has_cp
+        self.r_space = deepcopy(right_space)
+        self.l_space = deepcopy(left_space)
+        self.tc_vals = deepcopy(tie_class_vals)
+        self.rd = len(right_space)
+        self.ld = len(left_space)
+        self.n = len(right_space[0])
+        self.r = min(self.rd, pb_ntclass)
+        self.k = (factorial(self.rd) // (factorial(self.r) * factorial(self.rd-self.r))) 
 
+        
+        # Have we checked positive side of this combination
+        self.pside = False
 
+        self.cmb = itr.combinations(tie_class_reprs, self.r)
+        self.ncmb = 0
 
-            print("Calling solver with %d nodes and %d bases for combination %d of %d, query %d of %d"%( 
-                    self.n, self.r, self.ncmb, self.k, self.qn, pb_nqueries))
-            # Continue doing queries
-            if self.solver.check() == z3.sat:
-                print("Found pullback")
-                mdl = self.solver.model()
-                rvals = [ mdl.eval(v) for v in self.z3_lv ]
-                print(rvals)
-                cex = [ rv.numerator_as_long() / rv.denominator_as_long() for rv in rvals ]
-                self.solver.add( z3.Not( z3.And([ lv == c for lv, c in zip(self.z3_lv, cex) ])))
-                self.qn += 1
-                return cex
+        
+        # Number of queries we have done. By this, we signal that we have not done any queries yet
+        self.qn = pb_nqueries
+
+        #self.solver.push()
+
+        self.prev_ret = []
+        
+
+    
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        
+        while True:
+            if self.h_cp:
+                self.h_cp = False
+                print("Returning right space")  #DEBUG
+                self.prev_ret = self.r_space
+                return self.r_space
+
             else:
-                print("Pullback failed")
-                print(self.solver) #DEBUG
-                #assert(False) #DEBUG
-                self.qn = pb_nqueries  # Signal that we need to go to the next iteration
-
- 
+                print("Searching for non-all-positive combos")
+                bz = []
+                bnz = []
+                clss = next(self.cmb)
+                self.ncmb += 1
+                for i in range(self.n):
+                    if self.tc_vals[i] in clss:
+                        bz.append([0]*i + [1] + [0]*(self.n-i-1))
+                    else:
+                        bnz.append([0]*i + [1] + [0]*(self.n-i-1))
+                b1 = space_intersect(bnz, self.r_space)
+                if len(b1) <= 0:
+                    print("Intersection for combination is null")
+                    continue
+                self.prev_ret = extend_basis(self.prev_ret, extend_basis(b1, bz))
+                return self.prev_ret
+                
            
 
 def pull_back_cex_explore(weights, biases, inp_dim, 
@@ -509,6 +556,134 @@ def pull_back_cex_explore(weights, biases, inp_dim,
         print('CEX is spurious')
         return False, [] 
 
+def pull_back_cex_explore2(weights, biases, inp_dim, 
+                            perm, prc_eq, in_basis,
+                            jlt_mat, jlt_krn, jat_mat,
+                            pre_lin_ints, post_lin_ints, tc_reps, tc_vals, has_cp,
+                            curr_lyr, spr_basis):
+    """
+    Given a basis of potential counterexamples at any layer, pulls the cex back over the network
+    to the input layer and checks if the cex is true or spurious. The arguments are:
+
+    weights, biases     -   Weights and biases of the network
+    inp_dim             -   Dimensions of the input to the nn
+    perm                -   Permutation to validate final cex against
+    prc_eq              -   The precondition equations on the input
+    jlt_mat, jlt_krn,   -   Matrices giving the joint linear transform, and their kernels for each
+    jat_mat                 layer
+    post_lin_ints,      -   The interpolants derived for each layer, given as an affine space feeding into
+    pre_lin_ints,           the joint affine transform, and the corresponding affine space emerging
+                            from the joint affine transform
+    curr_lyr            -   The layer at which the potential counterexample basis was produced
+    spr_basis           -   The space known not to yield any counterexamples
+
+    """
+
+    print('Attempting pullback at layer %d'%curr_lyr)   #DEBUG
+    print(len(in_basis[0]))
+    
+    suc = True
+    if curr_lyr > 0:
+        idx = curr_lyr-1
+        prel = pre_lin_ints[idx]
+        pstl = post_lin_ints[idx]
+        b = biases[idx]
+        aj = jat_mat[idx].tolist()
+        
+        # iterate over pull backs across the relu in this layer
+        for gsp in ReluPullbackIterator2(pstl, spr_basis, tc_reps[idx], tc_vals[idx], has_cp[idx], True):
+        
+            # Pull back over affine transform
+            bs = aj + [ [ -v for v in r ] for r in gsp ]
+            n_spr_basis = [ r[:len(aj)] for r in 
+                                    np.transpose(sp.null_space(np.transpose(bs))).tolist() ]
+            print("Pullback dimension %d"%len(aj))
+
+            # Pull back obtained basis in lower layers, return if something is found
+            suc, cex = pull_back_cex_explore2(weights, biases, inp_dim, perm, prc_eq, in_basis, 
+                                                jlt_mat, jlt_krn, jat_mat, pre_lin_ints,
+                                                post_lin_ints, tc_reps, tc_vals, has_cp, idx, n_spr_basis)
+            if suc:
+                return True, cex
+
+        # Nothing is found for any pullback across relu
+        return False, []
+    else:
+
+        print('Pullback reached layer 0')
+
+        # Decompose input space
+        print(len(in_basis[0]), len(spr_basis[0]))
+        b_space = space_intersect(in_basis, spr_basis)
+        if len(b_space) <= 0:
+            g_space = in_basis
+            print("Spurious space is 0")
+        else:
+            g_space = space_intersect(in_basis, np.transpose(sp.null_space(np.matrix(b_space))))
+        assert(len(g_space) > 0)
+
+        # Give up if all last elements of g_space are 0
+        allz = True
+        for r in g_space:
+            allz = allz and (r[-1] == 0)
+        if allz:
+            print("All last components are 0")
+            return False, []
+
+        # First try bases
+        for b in g_space:
+            if b[-1] != 0 and check_cex(weights, biases, perm, prc_eq, 
+                            [ b[i] / b[-1] for i in range(inp_dim) ]):
+                print("Lucky basis")
+                return True, [ b[i] / b[-1] for i in range(inp_dim) ]
+
+        # Now, try random combinations
+        for tr in range(pb_nrandq):
+            print("Trying random combination %d of %d"%(tr, pb_nrandq), end='\r')
+
+            # Nonzero contribution from g_space
+            gcf = [0] * len(g_space)
+            allz = True
+            for i in range(len(g_space)-1):
+                gcf[i] = random.uniform(pb_rand_lb, pb_rand_ub)
+                allz = allz and (gcf[i] == 0)
+
+            # Adjust if contribution from g_space is 0
+            while allz:
+                idx = random.randint(0, len(g_space))
+                gcf[idx] = random.uniform(pb_rand_lb, pb_rand_ub)
+                if gcf[-1] != 0:
+                    allz = False
+
+            # Any contribution from b_space
+            bcf = [ random.uniform(pb_rand_lb, pb_rand_ub) for _ in b_space ]
+
+            # Sum of last elements, used to get a point from a vector in affine space
+            lst = sum([ gc*gb[-1] for gc, gb in zip(gcf, g_space) ]) + \
+                    sum([ bc*bb[-1] for bc, bb in zip(bcf, b_space) ])
+
+            # Adjust lst if 0
+            if lst == 0:
+                for i in range(len(gcf)):
+                    if g_space[i][-1] != 0:
+                        lst += g_space[i][-1]
+                        gcf[i] += 1
+
+            # Potential counterexample point
+            cx = [ (sum([ gc*gb[i] for gc, gb in zip(gcf, g_space) ]) + 
+                    sum([ bc*bb[i] for bc, bb in zip(bcf, b_space) ])) / lst for i in range(inp_dim) ]
+            
+            if check_cex(weights, biases, perm, prc_eq, cx):
+                print("Found CEX")
+                return True, cx
+        
+        print("No random combination worked")
+        return False, []
+
+
+
+
+
 
 
 
@@ -546,6 +721,11 @@ def perm_check(weights, biases, perm, prc_eq):
             in_basis.append(b + [0])
         in_basis.append((inp_dim*2)*[0] + [1])
     print(len(in_basis), len(in_basis[0]))
+    prc_space = [ r[:] for r in in_basis ]
+
+    # DEBUG
+    print((np.matrix(prc_a) @ np.transpose(np.matrix(prc_space[-1][:inp_dim]))) - np.matrix(prc_b))
+    #assert(False)
 
 
     
@@ -605,8 +785,10 @@ def perm_check(weights, biases, perm, prc_eq):
             # This is the affine subspace from which we will pix cexs.
             #cex_basis = [ ib for ib, eb in zip(in_basis, eq_basis) if not np.allclose(eb, 0) ]
 
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn,
-                                            pre_lin_ints, post_lin_ints, tc_reps, tc_vals, has_cp, curr_lyr, cex_basis)
+            suc, cex = pull_back_cex_explore2(weights, biases, inp_dim, perm, prc_eq, prc_space,
+                                            jlt_mat, jlt_krn, jat_mat,
+                                            pre_lin_ints, post_lin_ints, tc_reps, tc_vals, has_cp, 
+                                            curr_lyr, cex_basis)
 
             if suc:
                 return False, cex #DEBUG
@@ -678,7 +860,8 @@ def perm_check(weights, biases, perm, prc_eq):
             cex_basis[0] = [ v.numerator_as_long()/v.denominator_as_long() for v in cex_basis[0]]\
                             + [1]
             
-            suc, cex = pull_back_cex_explore(weights, biases, inp_dim, perm, prc_eq, jlt_mat, jlt_krn,
+            suc, cex = pull_back_cex_explore2(weights, biases, inp_dim, perm, prc_eq, prc_space,
+                                            jlt_mat, jlt_krn, jat_mat,
                                             pre_lin_ints, post_lin_ints, tc_reps, tc_vals, has_cp, i, cex_basis)
             if suc:
                 return False, cex       #DEBUG
@@ -711,9 +894,13 @@ if __name__ == '__main__':
     #    print("..." if len(b) > 10 else "", flush=True)
     #print(push_forward_relu(sp1))
 
-    rand_left =     [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-2) ]
-    rand_right =    [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-1) ]
-    rand_one =      [ [ random.uniform(1, 100) for i in range(n) ] for j in range(k)]
-    pb = timeit(lambda x : [c for c in ReluPullbackIterator(x, True)], rand_right)
-    print("Pullback done, returned %d cexes"%len(pb))
+    #rand_left =     [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-2) ]
+    #rand_right =    [ [ random.uniform(1, 100) for i in range(n) ] for j in range(n-1) ]
+    #rand_one =      [ [ random.uniform(1, 100) for i in range(n) ] for j in range(k)]
+    #pb = timeit(lambda x : [c for c in ReluPullbackIterator(x, True)], rand_right)
+    #print("Pullback done, returned %d cexes"%len(pb))
+
+    asp = [[1, 0, 0], [0, 1, 0]]
+    bsp = [[0, 0, 1]]
+    print(space_intersect(asp, bsp))
     
