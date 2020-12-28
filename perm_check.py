@@ -586,7 +586,7 @@ def perm_check(weights, biases, perm, prc_eq):
 
     # Linear inclusion loop
     for w, b, lm, curr_lyr in zip(weights, biases, jat_mat, range(num_lyrs)):
-        print('Kernel check for layer ', curr_lyr+1)
+        print('Kernel check for layer ', curr_lyr)
         l = len(w[0])
 
         # Find image of in_basis under space. Ensure generated out_basis is linearly independent
@@ -603,10 +603,10 @@ def perm_check(weights, biases, perm, prc_eq):
                                   [[0]*l])
 
         if np.allclose(np.matrix(in_basis) @ eq_basis, 0):
-            print('Verified at layer via linear inclusion ', curr_lyr+1)
+            print('Verified at layer via linear inclusion ', curr_lyr)
             return True, [] 
         else:
-            print('Linear inclusion failed at layer ', curr_lyr+1)
+            print('Linear inclusion failed at layer ', curr_lyr)
 
             # The basis containing the space at this layer where no CEX can ever be found
             spr_basis = np.transpose(sp.null_space(np.transpose(eq_basis))).tolist()
