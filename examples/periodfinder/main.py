@@ -76,19 +76,21 @@ Uncomment one of the following sections to impose various preconditions on the i
 #        lin_conds[j*perd + i][(m-1)*perd + i] = -1
 
 
-# The following specifies a perd=90 period signal. Additionally, it requires that each period of the
+# The following specifies a perd=60 period signal. Additionally, it requires that each period of the
 # signal is a section divided into three segments where the signal remains constant
-perd = 90
+perd = 60
 m = inp_size//perd
-lin_conds = [ [ 0 for _ in range(inp_size + 1) ] for _ in range(inp_size - 3)]
+lin_conds = [ [ 0 for _ in range(inp_size + 1) ] for _ in range(inp_size - perd)]
 for i in range(perd):
     for j in range(m-1):
         lin_conds[j*perd + i][j*perd + i] = 1
         lin_conds[j*perd + i][(m-1)*perd + i] = -1
 for i in range(3):
     for j in range(1, perd//3):
-        lin_conds[inp_size - perd + i*3 + j - 1][i*(perd//3)] = 1
-        lin_conds[inp_size - perd + i*3 + j - 1][i*(perd//3) + j] = -1
+        r = [ 0 for _ in range(inp_size + 1) ]
+        r[i*(perd//3)] = 1
+        r[i*(perd//3) + j] = -1
+        lin_conds.append(r)
 
 
 print("Verifying")
@@ -102,6 +104,4 @@ else:
     pmdl = [ mdl[p] for p in perm ]
     plt.plot([ i/inp_size for i in range(inp_size) ], mdl, 'b', label='cex')
     plt.plot([ i/inp_size for i in range(inp_size) ], pmdl, 'g', label='p(cex)')
-    print("Prediction:", encode_dnn.eval_dnn(weights, biases, mdl))
-    print("Permuted prediction:", encode_dnn.eval_dnn(weights, biases, pmdl))
     plt.show()
