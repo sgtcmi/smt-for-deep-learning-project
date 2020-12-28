@@ -59,14 +59,37 @@ inp_size = len(weights[0])
 shift = int(sys.argv[2])
 perm = [ (i+shift)%inp_size for i in range(inp_size) ]
 
-# Linconds for period perd
-perd = 100
+"""
+Uncomment one of the following sections to impose various preconditions on the input.
+"""
+# No precondition
+#lin_conds = []
+
+
+# This says that the produced signal should be periodic with a period of perd = 100.
+#perd = 100
+#m = inp_size//perd
+#lin_conds = [ [ 0 for _ in range(inp_size + 1) ] for _ in range(inp_size - perd)]
+#for i in range(perd):
+#    for j in range(m-1):
+#        lin_conds[j*perd + i][j*perd + i] = 1
+#        lin_conds[j*perd + i][(m-1)*perd + i] = -1
+
+
+# The following specifies a perd=90 period signal. Additionally, it requires that each period of the
+# signal is a section divided into three segments where the signal remains constant
+perd = 90
 m = inp_size//perd
-lin_conds = [ [ 0 for _ in range(inp_size + 1) ] for _ in range(inp_size - perd)]
+lin_conds = [ [ 0 for _ in range(inp_size + 1) ] for _ in range(inp_size - 3)]
 for i in range(perd):
     for j in range(m-1):
         lin_conds[j*perd + i][j*perd + i] = 1
         lin_conds[j*perd + i][(m-1)*perd + i] = -1
+for i in range(3):
+    for j in range(1, perd//3):
+        lin_conds[inp_size - perd + i*3 + j - 1][i*(perd//3)] = 1
+        lin_conds[inp_size - perd + i*3 + j - 1][i*(perd//3) + j] = -1
+
 
 print("Verifying")
 t0 = time.process_time()

@@ -534,11 +534,19 @@ def perm_check(weights, biases, perm, prc_eq):
     # Generate basis representing permutation constraint in the larger space
     in_basis = []
     if(len(prc_eq) > 0):
+        # Convert the constraints into a basis for a precondition space
         prc_a = np.matrix([ r[:-1] for r in prc_eq])
         prc_b = np.asarray([r[-1] for r in prc_eq])
         prc_eq_krn = np.transpose(sp.null_space(prc_a)).tolist()
         prc_eq_s0, _, _, _ = sp.lstsq(prc_a, prc_b)
         prc_eq_s0 = prc_eq_s0.tolist()
+        
+        if len(prc_eq_krn) <= 0:
+            # The equations determine exactly one input, and so we just check if that is a cex
+            if check_cex(weights, biases, perm, prc_eq, prc_eq_s0):
+                return False, prc_eq_s0
+            return True, []
+        
         in_basis = [ r + [r[p] for p in perm] + [0] for r in prc_eq_krn] + \
                     [ prc_eq_s0 + [prc_eq_s0[p] for p in perm] + [1] ]
     else:
