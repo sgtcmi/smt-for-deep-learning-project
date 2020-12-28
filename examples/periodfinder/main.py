@@ -63,18 +63,18 @@ perm = [ (i+shift)%inp_size for i in range(inp_size) ]
 Uncomment one of the following sections to impose various preconditions on the input.
 """
 # No precondition
-#lin_conds = []
+lin_conds = []
 
 
 # This says that the produced signal should be periodic with a period of perd = 100.
 #perd = 100
-#m = inp_size//perd
-#lin_conds = [ [ 0 for _ in range(inp_size + 1) ] for _ in range(inp_size - perd)]
-#for i in range(perd):
-#    for j in range(m-1):
-#        lin_conds[j*perd + i][j*perd + i] = 1
-#        lin_conds[j*perd + i][(m-1)*perd + i] = -1
-
+#äm = inp_size//perd
+#älin_conds = [ [ 0 for _ in range(inp_size + 1) ] for _ in range(inp_size - perd)]
+#äfor i in range(perd):
+#ä    for j in range(m-1):
+#ä        lin_conds[j*perd + i][j*perd + i] = 1
+#ä        lin_conds[j*perd + i][(m-1)*perd + i] = -1
+#ä
 
 # The following specifies a perd=60 period signal. Additionally, it requires that each period of the
 # signal is a section divided into three segments where the signal remains constant
@@ -93,7 +93,7 @@ for i in range(3):
         lin_conds.append(r)
 
 
-print("Verifying")
+print("Verifying, shift is: ", shift)
 t0 = time.process_time()
 res, mdl = perm_check(weights, biases, perm, lin_conds)
 print("Time: ", time.process_time() - t0)
