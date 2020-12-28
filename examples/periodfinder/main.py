@@ -10,7 +10,7 @@ Command line usage:
                 ignored. If no model exists in the given location, it saves the model.
     arg2    -   How much to shift the wave if the permutation
     arg3    -   Dataset file name
-    arg4    -   Number of sample points in the dataset
+    arg4    -   Number of samples per point in the dataset
     arg5    -   Number of layers
     arg6    -   Batch size, set between 50-100 for best results
     arg7    -   Number of epochs
@@ -46,7 +46,9 @@ if __name__ == "__main__":
     sys.path.insert(1, "../..")
 from direct_check import *
 from perm_check import *
+from utils import *
 import matplotlib.pyplot as plt
+import time
 
 # We get the weights and biases of the network
 weights = [l.get_weights()[0].tolist() for l in mdl.layers]
@@ -67,10 +69,16 @@ for i in range(perd):
         lin_conds[j*perd + i][(m-1)*perd + i] = -1
 
 print("Verifying")
+t0 = time.process_time()
 res, mdl = perm_check(weights, biases, perm, lin_conds)
+print("Time: ", time.process_time() - t0)
 if res:
     print('Verified')
 else:
     print('Not verified') #, model: ', mdl)
-    plt.plot([ i/inp_size for i in range(inp_size) ], mdl)
+    pmdl = [ mdl[p] for p in perm ]
+    plt.plot([ i/inp_size for i in range(inp_size) ], mdl, 'b', label='cex')
+    plt.plot([ i/inp_size for i in range(inp_size) ], pmdl, 'g', label='p(cex)')
+    print("Prediction:", encode_dnn.eval_dnn(weights, biases, mdl))
+    print("Permuted prediction:", encode_dnn.eval_dnn(weights, biases, pmdl))
     plt.show()
