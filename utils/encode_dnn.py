@@ -16,10 +16,14 @@ def encode_network(weights, biases, z3_input):
 
     # z3 consts for values of each layer
     z3_nodes = [z3_input]
-    for w, b in zip(weights, biases):
-        z3_nodes.append([z3.Sum([w[j][i]*z3_nodes[-1][j] for j in range(len(w[i]))])
-                            + b[i] for i in range(len(b))])
-        z3_nodes[-1] = [z3.If(z >= 0, z, 0) for z in z3_nodes[-1]]
+    for w, b, n in zip(weights, biases, range(len(weights))):
+        nd = [0] * len(b)
+        for i in range(len(b)):
+            print("Encoding layer %d, neuron %i"%(n, i), end='\r')
+            ndexpr = z3.Sum([w[j][i]*z3_nodes[-1][j] for j in range(len(w[i]))]) + b[i]
+            nd[i] = z3.If(ndexpr >= 0, ndexpr, 0)
+        z3_nodes.append(nd)
+    print()
 
     return z3_nodes[-1]
 
