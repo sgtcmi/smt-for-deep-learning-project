@@ -95,13 +95,14 @@ for i in range(3):
 
 print("Verifying, shift is: ", shift)
 t0 = time.process_time()
-res, mdl = perm_check(weights, biases, perm, lin_conds)
+res, cex = perm_check(weights, biases, perm, lin_conds)
 print("Time: ", time.process_time() - t0)
 if res:
     print('Verified')
 else:
     print('Not verified') #, model: ', mdl)
-    pmdl = [ mdl[p] for p in perm ]
-    plt.plot([ i/inp_size for i in range(inp_size) ], mdl, 'b', label='cex')
-    plt.plot([ i/inp_size for i in range(inp_size) ], pmdl, 'g', label='p(cex)')
+    pcex = [ cex[p] for p in perm ]
+    print('Output for model and permuted model:', mdl.predict([cex, pcex]))
+    plt.plot([ i/inp_size for i in range(inp_size) ], cex, 'b', label='cex')
+    plt.plot([ i/inp_size for i in range(inp_size) ], pcex, 'g', label='p(cex)')
     plt.show()

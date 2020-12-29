@@ -137,3 +137,6 @@ if res:
     print('Verified')
 else:
     print('Not verified, model: ', mdl)
+    pmdl = [ mdl[p] for p in perm ]
+    print('Output for cex and permuted cex: ', encode_dnn.eval_dnn(mdl), encode_dnn.eval_dnn(pmdl), 
+            dnn([mdl, pmdl])

@@ -41,5 +41,6 @@ def eval_dnn(weights, biases, inp):
 
     layer = inp
     for w, b in zip(weights, biases):
-        layer = [ sum(( w[j][i]*layer[j] for j in range(len(w[i])) )) for i in range(len(b)) ]
+        layer_ = [ max(sum(( w[j][i]*layer[j] for j in range(len(w[i])) )) + b[i], 0) for i in range(len(b)) ]
+        layer = layer_
     return layer
